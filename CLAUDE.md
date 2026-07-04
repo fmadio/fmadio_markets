@@ -254,6 +254,14 @@ engineering / fmadio).
                           Protocol_ITCH5Decode (MoldUDP64 walk, all 23 message
                           types, one parquet row per message)
     *.pdf               - source specs (extract with pdftotext -layout)
+    validate/           - luajit validation suite, see Validation section
+- data/                 - symlink to /mnt/data/markets_data (may appear broken
+                          until mounted/populated); data/protocol/nasdaq_md_itch5/
+                          holds the real capture + references, all zstd:
+                          ny4-xnas-tvitch-20230822.pcap.zst (10GB, 34GB raw),
+                          .pcap.mdgap.seqno.csv.zst (3rd party seq reference),
+                          .pcap.tshark.json.{1m,20m}.zst + .tshark.10m.json.zst
+                          (OMI tshark ek exports)
 
 ## Build / run
 
@@ -277,17 +285,42 @@ engineering / fmadio).
   ns since midnight ET; prices DECIMAL(16,4) / DECIMAL(20,8) via
   duckdb_append_double
 
-## Validation status (2023-08-22 Nasdaq NY4 capture, session 000010058B/59B)
+## Validation suite (protocol/nasdaq_md_itch5/validate/, luajit + duckdb CLI)
 
-- vs mdgap.csv (3rd party, 399.7M rows): all 399,621,195 parquet msgs match
-  seq + timestamp exactly; the 65,535 csv-only rows are a 3rd party bug
-  (MoldUDP64 End of Session msgCount 0xFFFF miscounted as real messages)
-- vs OMI tshark json (428,122 msgs, 17 fields): zero differences after fixing
-  the json flattener (not the decoder)
-- tshark -T ek caveats: duplicate json keys in mixed-type packets (python
-  json.loads keeps last silently - use object_pairs_hook), fields grouped by
-  message-type subtree destroying wire order, Y message uses 'locatecode' not
-  'stocklocate'. Prefer -T json or -T fields -E occurrence=a
+Repeatable, all targets exit nonzero on failure (CI ready). Scripts named
+validate_*.lua. Full methodology + input file md5sums/counts in
+nasdaq_md_itch5.md section 9.
+
+- make synthetic  - gen_pcap.lua builds a pcap with all 23 message types +
+                    known values (multi-message mold packets, heartbeat);
+                    validate_synthetic.lua decodes and field-checks 27
+                    assertions. Status: 27/27 PASS
+- make real       - validate_real.lua runs the whole pipeline: zstdcat pcap.zst
+                    | decoder -o <temp parquet in validate/> then duckdb join
+                    vs mdgap seqno csv (seq + pcap timestamp). Knows the End of
+                    Session artifact signature (3rd party counts the 0xFFFF
+                    sentinel as 65535 msgs from one packet/one timestamp) and
+                    passes it as explained. Status: 3/3 PASS, 399,621,195 msgs,
+                    decode takes ~11 min
+- make json_1m    - validate_real_json_1m.lua flattens the OMI tshark ek json
+                    slice (pattern-walks raw text in key order, no json lib)
+                    and compares 17 fields/msg vs the parquet on (session,
+                    seq). Reuses parquet from make real if present. Status:
+                    18/18 PASS, 428,122 msgs, zero field diffs
+- override inputs: make real REAL_PCAP=... REAL_CSV=...; duckdb reads .csv.zst
+  natively, pcap.zst is streamed via zstdcat into decoder stdin
+
+## Validation findings / external tool caveats
+
+- 2023-08-22 Nasdaq NY4 capture, mold sessions 000010058B (prev session tail,
+  247,829 msgs, seq 406,312,900+) and 000010059B (399,373,366 msgs, seq 1+)
+- 3rd party mdgap tool bug: MoldUDP64 End of Session (msgCount 0xFFFF) counted
+  as 65,535 real messages; decoder is correct to emit none
+- tshark -T ek caveats (all handled in validate_real_json_1m.lua): duplicate
+  json keys in mixed-type packets (json.loads keeps last silently), fields
+  grouped by message-type subtree destroying wire order for same-named fields,
+  Y message uses 'locatecode' not 'stocklocate'. Prefer -T json or
+  -T fields -E occurrence=a
 - OMI wireshark-lua dissectors: load single file via
   tshark -X lua_script:<file.lua>; loading the whole repo as plugins breaks
   (some dissectors have lua errors); PSX/Nasdaq ITCH heuristics both claim
@@ -303,6 +336,10 @@ engineering / fmadio).
 - duckdb CLI + libduckdb (duckdb.h /usr/local/include, libduckdb.so
   /usr/local/lib) installed; this duckdb version lacks large_number_rendering;
   use format('{:,}', x) for thousand separators, GROUP BY ROLLUP for totals
-- big reference files at repo root: mdgap.csv (~30GB),
-  ny4-xnas-tvitch-20230822.pcap.tshark.json(.1m), fmadio_markets.parquet
-  (399.6M rows) - use duckdb for any analysis, never load into memory
+- luajit 2.1 (/usr/bin/luajit) + zstd/zstdcat installed. LuaJIT numbers are
+  doubles: keep epoch-ns timestamps (>2^53) as STRINGS in lua, let duckdb
+  parse them
+- canonical big data lives under data/protocol/<protocol>/ as .zst; legacy
+  uncompressed copies may exist at repo root (mdgap.csv, fmadio_markets.parquet,
+  *.tshark.json*) - use duckdb for any analysis, never load into memory;
+  machine has 192 cores / 715GB ram, 400Mx400M duckdb joins take ~2-3 min
