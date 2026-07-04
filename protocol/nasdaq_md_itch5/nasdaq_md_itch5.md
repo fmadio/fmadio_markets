@@ -664,3 +664,111 @@ RP = PIM Rendezvous Point for the multicast group.
   20-byte MoldUDP64 request packet format applies (section 1.3).
 - Source IP subnets are useful for sender validation / reverse path filtering but
   the payload is identical regardless of source.
+
+---
+
+## 9. Decoder Validation
+
+The Protocol_ITCH5Decode implementation (nasdaq_md_itch5.c) was validated three
+ways: a synthetic unit test, and two independent cross-validations against a
+real production capture (Nasdaq NY4, trading day 2023-08-22, MoldUDP64 sessions
+000010058B / 000010059B, ~400M messages).
+
+### 9.1 Synthetic unit test (all 23 message types)
+
+A generated pcap containing every ITCH 5.0 message type (S R H Y L V W K J h
+A F E C X D U P Q B I N O) with hand-computed field values was built inside
+MoldUDP64 packets (including implicit sequence numbering across multi-message
+packets and a heartbeat packet) addressed to the Nasdaq NY "A" endpoint
+233.54.12.111:26477. The resulting parquet was queried back with duckdb and
+every field checked against the known inputs: prices (Price(4) and Price(8)
+paths), 48-bit timestamps, alpha trimming/NULL semantics, 8-byte cross shares,
+order replace reference chaining, heartbeat exclusion. 23/23 messages exact.
+
+### 9.2 Sequence number + timestamp validation vs 3rd party (mdgap.csv)
+
+mdgap.csv (3rd party tool output; one row per message: pcap epoch ns timestamp,
+multicast group, port, protocol, mold sequence number; 399,686,730 rows) was
+joined in duckdb against the decoder parquet on sequence number:
+
+- 399,621,195 messages matched: every parquet row present in the reference
+- timestamp mismatches: 0
+- parquet rows missing from the reference: 0
+- reference rows missing from the parquet: 65,535 - ALL from one single packet
+  (one distinct pcap timestamp, contiguous seq block 406560729..406626263,
+  at the 2023-08-22 00:06:15 UTC session end). This is a MoldUDP64 End of
+  Session packet: Message Count 0xFFFF is a sentinel (see section 1.1), not a
+  real count. The 3rd party tool counted it as 65,535 messages; the decoder
+  correctly emits none. Verdict: 3rd party bug, decoder correct.
+
+### 9.3 Field level validation vs OMI Wireshark dissector (tshark)
+
+The pcap was independently decoded with tshark using the Open Markets
+Initiative (github.com/Open-Markets-Initiative/wireshark-lua) TotalView-ITCH
+5.0 lua dissector, exported as ek json (428,122 messages covering the start of
+session directory spin: S R H Y L D types plus heartbeats). The json was
+flattened to one row per message and joined against the parquet on
+(session, sequence number). 17 fields compared: pcap timestamp, message type,
+stock locate, tracking number, ITCH timestamp, stock, order reference number,
+trading state, reg SHO action, MPID, market category, round lot size, issue
+classification, event code, primary market maker, market maker mode, market
+participant state.
+
+Result: 428,122 / 428,122 messages matched with ZERO field differences.
+
+Caveats for reproducing (tshark -T ek serialization quirks, NOT decoder
+issues - each initially appeared as a false mismatch):
+
+1. Mixed-type packets emit duplicate json keys (invalid json); python
+   json.loads silently keeps the last value. Parse with object_pairs_hook.
+2. Per-message fields are grouped by message-type subtree, not wire order:
+   a packet [H,Y,H,Y] emits both H field sets as one array and both Y sets
+   as another. Values must be consumed from per-(message type, field) queues
+   while walking messagetype[] in wire order.
+3. The Y message names its locate field 'locatecode'; all other messages use
+   'stocklocate'.
+
+Prefer tshark -T json or -T fields -E occurrence=a over -T ek. Load only the
+single needed OMI dissector via -X lua_script: (loading the whole repo as a
+plugin dir hits broken dissectors) and force dissection with
+-d udp.port==26477,<name> since the Nasdaq/PSX/BX ITCH heuristics all claim
+the same payloads.
+
+### 9.4 Validation input files (provenance)
+
+To confirm a re-validation uses the same inputs, check md5sum and counts below.
+Capture: Nasdaq NY4, TotalView-ITCH 5.0, trading day 2023-08-22 (UTC day),
+source pcap ny4-xnas-tvitch-20230822.pcap.
+
+| File | Bytes | md5sum |
+|------|-------|--------|
+| fmadio_markets.parquet (decoder output) | 10575439523 | bad0aad94ce7b1d20f5b7a9a2ab3afa4 |
+| mdgap.csv (3rd party reference, 9.2) | 31464140568 | a8979df0a4e980b3a8c0bd9e4860ff34 |
+| ny4-xnas-tvitch-20230822.pcap.tshark.json (OMI tshark ek, full) | 1298378752 | f36bd31a2e4d6a074254f5dc64b99f6a |
+| ny4-xnas-tvitch-20230822.pcap.tshark.json.1m (truncated slice used in 9.3) | 1016442880 | c53346936f90351d73845f8e86d5772e |
+
+Row / message counts:
+
+- mdgap.csv: 399,686,730 rows (includes the 65,535 bogus End of Session rows)
+- parquet: 399,621,195 messages total across two MoldUDP64 sessions:
+  - session 000010058B: 247,829 msgs, seq 406,312,900 .. 406,560,728
+    (tail of the previous trading session, 20:00-20:06 ET 2023-08-21)
+  - session 000010059B: 399,373,366 msgs, seq 1 .. 399,373,366
+- tshark ek json .1m slice: 429,267 lines = 214,633 packets = 428,122 decoded
+  messages (plus 663 heartbeat/EOS packets, 1 truncated final line)
+
+Parquet message type breakdown (validates the same decode):
+
+| msgType | Count | | msgType | Count |
+|---------|-------|-|---------|-------|
+| A | 166,458,635 | | H | 11,377 |
+| D | 160,251,514 | | R | 11,329 |
+| U | 48,888,395  | | Y | 11,698 |
+| E | 9,934,872   | | Q | 22,662 |
+| I | 5,544,347   | | J | 36 |
+| P | 3,630,769   | | S | 6 |
+| X | 2,745,726   | | V | 1 |
+| F | 1,649,681   | | W | 0 |
+| C | 197,635     | | L | 262,512 |
+
+Total: 399,621,195. Message types B, K, N, O, h: 0 occurrences in this capture.
