@@ -234,7 +234,9 @@ engineering / fmadio).
                           VLAN strip (0x8100/0x9100/0x88a8 incl QinQ), IPv4
                           TCP/UDP identification, ProcessPacket/ProcessTCP/
                           ProcessUDP dispatch, stats + 10 sec status line,
-                          parquet open/close, -o output option
+                          parquet open/close, -o output option, -p protocol
+                          selection (Protocol_t enum, one active decoder per
+                          run owning the single parquet table)
 - src/fTypes.h          - fixed width types (u8..u128 as unsigned long long
                           etc), kKB/kMB/kGB, k1E9, INLINE, clock_ns, rdtsc,
                           swap16/32/64/128, FormatTS, clock_date_t, ns2clock,
@@ -255,41 +257,76 @@ engineering / fmadio).
                           types, one parquet row per message)
     *.pdf               - source specs (extract with pdftotext -layout)
     validate/           - luajit validation suite, see Validation section
+- protocol/opra_md_pillar6/
+    opra_md_pillar6.md  - decoder reference: 21 byte transmission block header,
+                          block/message sequence numbering rules, all 9 message
+                          categories (a d f k q C H R Y) w/ offsets, BBO
+                          indicator/appendage tables, denominator codes, sec 7 =
+                          flat parquet schema (47 cols), sec 8 = fully patterned
+                          multicast addressing (lines 1-96, 220-225, GTH
+                          201-204, A/B streams, prod/retrans/playback), sec 9 =
+                          validation status
+    opra_md_pillar6.c/h - Protocol_OPRA6SchemaCreate (table "opra" + appender),
+                          Protocol_OPRA6PacketClassify (computes line/stream/
+                          feedType arithmetically from group+port into
+                          OPRA6Endpoint_t; both must agree), Protocol_OPRA6Decode
+                          (block walk, all 9 categories, denominator price
+                          scaling, BBO appendages, one parquet row per message).
+                          NOTE: no per-message length field in OPRA - message
+                          length derives from category + BBO indicator; unknown
+                          category aborts the rest of the block
+    *.pdf               - source specs: OPRA_Pillar_Output_Specification.pdf
+                          (v6.4a) + OPRA_Common_IP_Multicast_Distribution_
+                          Network.pdf (v1.59), extract with pdftotext -layout
+    validate/           - luajit validation suite, see Validation section
 - data/                 - symlink to /mnt/data/markets_data (may appear broken
                           until mounted/populated); data/protocol/nasdaq_md_itch5/
                           holds the real capture + references, all zstd:
                           ny4-xnas-tvitch-20230822.pcap.zst (10GB, 34GB raw),
                           .pcap.mdgap.seqno.csv.zst (3rd party seq reference),
                           .pcap.tshark.json.{1m,20m}.zst + .tshark.10m.json.zst
-                          (OMI tshark ek exports)
+                          (OMI tshark ek exports); no OPRA capture yet
+                          (data/protocol/opra_md_pillar6/ pending)
 
 ## Build / run
 
 - make                  -> src/fmadio_markets (gcc, -Wall -Wextra clean,
-                          -I/usr/local/include -Isrc -Iprotocol/nasdaq_md_itch5,
+                          -I/usr/local/include -Isrc -Iprotocol/<each protocol>,
                           links -lduckdb from /usr/local/lib)
-- src/fmadio_markets -r <pcap> -o <out.parquet>
-- summary on stderr: bytes/pkts/tcp/udp/other/ITCH5 pkts/ITCH5 msgs, duration,
+- src/fmadio_markets -r <pcap> -o <out.parquet> [-p <protocol>]
+- -p selects the decoder: nasdaq_md_itch5 | itch5 (default) or
+  opra_md_pillar6 | opra
+- summary on stderr: bytes/pkts/tcp/udp/other + per-protocol pkts/msgs
+  (Pkt ITCH5/Msg ITCH5 or Pkt OPRA6/Msg OPRA6), duration,
   avg Gbps and peak Gbps (1 msec burst) from pcap timestamps
 - status line every 10 sec; wall clock checked only every 64K packets
   (STATUS_CHECK_MASK) because clock_gettime per packet is too slow
 
 ## Protocol decoder conventions
 
-- one directory per protocol under protocol/
-- public functions prefixed Protocol_ e.g. Protocol_ITCH5Decode
+- one directory per protocol under protocol/; new protocol = decoder .c/.h +
+  <protocol>.md reference doc + validate/ suite, wired into the Makefile,
+  main.c Protocol_t enum / -p parsing / ProcessUDP dispatch / schema create
+  switch / summary lines
+- public functions prefixed Protocol_ e.g. Protocol_ITCH5Decode,
+  Protocol_OPRA6Decode
 - decoder owns its parquet schema (flat, union of all protocol columns, NULL
-  for absent fields) and sets pq->tableName
-- ProcessUDP/ProcessTCP receive Parquet_t* and dispatch by classifier
+  for absent fields) and sets pq->tableName; one protocol active per run
+- ProcessUDP/ProcessTCP receive Parquet_t* and dispatch by classifier; when
+  the transport layer needs endpoint context (e.g. OPRA line/stream/feedType)
+  the classifier fills an <Protocol>Endpoint_t that is passed to the decoder
 - all timestamps u64 nanoseconds; pcapTS = ns since epoch, ITCH timestampNS =
-  ns since midnight ET; prices DECIMAL(16,4) / DECIMAL(20,8) via
-  duckdb_append_double
+  ns since midnight ET, OPRA blockTimestampNS = ns since epoch (only per-block,
+  no per-message timestamp); prices DECIMAL(16,4) / DECIMAL(20,8) via
+  duckdb_append_double (OPRA scales by wire denominator codes at decode time)
 
-## Validation suite (protocol/nasdaq_md_itch5/validate/, luajit + duckdb CLI)
+## Validation suites (protocol/<protocol>/validate/, luajit + duckdb CLI)
 
 Repeatable, all targets exit nonzero on failure (CI ready). Scripts named
-validate_*.lua. Full methodology + input file md5sums/counts in
-nasdaq_md_itch5.md section 9.
+validate_*.lua, gen_pcap.lua builds the synthetic input. Full methodology +
+input file md5sums/counts in each protocol's .md section 9.
+
+### nasdaq_md_itch5/validate/
 
 - make synthetic  - gen_pcap.lua builds a pcap with all 23 message types +
                     known values (multi-message mold packets, heartbeat);
@@ -310,6 +347,24 @@ nasdaq_md_itch5.md section 9.
 - override inputs: make real REAL_PCAP=... REAL_CSV=...; duckdb reads .csv.zst
   natively, pcap.zst is streamed via zstdcat into decoder stdin
 
+### opra_md_pillar6/validate/
+
+- make synthetic  - gen_pcap.lua builds a 17 packet pcap: all 9 categories,
+                    every BBO appendage variant (none/bid/offer/double on long
+                    and short quotes), denominator codes A B C D E H I + short
+                    quote implied A/B, signed negative netChange, 8 byte denom
+                    H underlying, pad bytes, block checksums, implicit seq
+                    numbering, zero quote, prod/retrans/playback + GTH + A/B
+                    stream classification, 4 negative packets (wrong port, CQS
+                    lookalike group, wrong version, wrong feed indicator) and
+                    an unknown-category-mid-block case;
+                    validate_synthetic.lua decodes (-p opra) and field-checks
+                    29 assertions. Status: 29/29 PASS
+- make real       - PENDING: no OPRA capture / 3rd party reference yet under
+                    data/protocol/opra_md_pillar6/. Join key must be
+                    (line, msgSeqNo) - OPRA has no per-message timestamp.
+                    Methodology in opra_md_pillar6.md section 9.2
+
 ## Validation findings / external tool caveats
 
 - 2023-08-22 Nasdaq NY4 capture, mold sessions 000010058B (prev session tail,
@@ -325,17 +380,30 @@ nasdaq_md_itch5.md section 9.
   tshark -X lua_script:<file.lua>; loading the whole repo as plugins breaks
   (some dissectors have lua errors); PSX/Nasdaq ITCH heuristics both claim
   port 26477 - force with -d udp.port==26477,<name>
+- OPRA gotchas (vs MoldUDP64): no per-message length field (length = category
+  + BBO indicator; unknown category = rest of block undecodable), no
+  per-message timestamp (block timestamp only), block seq number is really a
+  per-line message seq number with exceptions (H/N line integrity = last
+  transmitted seq + does not consume; H/C start of day = 0; retrans blocks =
+  first msg seq), 224.0.200.x subnet is SHARED with CTS/CQS so the classifier
+  must match exact group octet + port pairs, categories C and H always one
+  per block, odd blocks get one 0x00 pad byte
 
 ## Environment notes
 
 - repo root dir is NOT writable for new files by the claude user (existing
-  files are); create new files under src/ or protocol/
+  files are); create new files under src/ or protocol/. New protocol dirs
+  dropped in by the repo owner may arrive mode 755 owner fmadio - ask the user
+  to chmod (via ! prefix) before writing into them
 - installs (apt-get) and network access need the user to run them via the
   ! prefix; poppler-utils (pdftotext) installed; tshark availability depends
   on user install
 - duckdb CLI + libduckdb (duckdb.h /usr/local/include, libduckdb.so
   /usr/local/lib) installed; this duckdb version lacks large_number_rendering;
   use format('{:,}', x) for thousand separators, GROUP BY ROLLUP for totals
+- test code writes parquet files with a .parq extension; duckdb's replacement
+  scan does NOT auto-detect .parq (FROM 'x.parq' fails with Catalog Error) -
+  always use read_parquet('x.parq') in queries
 - luajit 2.1 (/usr/bin/luajit) + zstd/zstdcat installed. LuaJIT numbers are
   doubles: keep epoch-ns timestamps (>2^53) as STRINGS in lua, let duckdb
   parse them

@@ -16,6 +16,20 @@
 #include "fTypes.h"
 #include "fParquet.h"
 #include "nasdaq_md_itch5.h"
+#include "opra_md_pillar6.h"
+
+//------------------------------------------------------------------------------
+// protocol selection: which decoder owns the parquet schema and receives
+// classified packets. selected on the command line with -p
+
+typedef enum
+{
+	PROTOCOL_ITCH5 = 0,			// nasdaq_md_itch5 (default)
+	PROTOCOL_OPRA6,				// opra_md_pillar6
+
+} Protocol_t;
+
+static Protocol_t s_protocol = PROTOCOL_ITCH5;
 
 //------------------------------------------------------------------------------
 // PCAP file format
@@ -173,6 +187,9 @@ static u64 s_totalOther	= 0;
 static u64 s_totalITCH5	= 0;		// UDP packets classified as TotalView-ITCH 5.0
 static u64 s_totalITCH5Msg = 0;		// ITCH messages decoded into the parquet table
 
+static u64 s_totalOPRA6	= 0;		// UDP packets classified as OPRA Pillar v6
+static u64 s_totalOPRA6Msg = 0;		// OPRA messages decoded into the parquet table
+
 static u64 s_lastPCAPTS	= 0;		// pcap timestamp (ns) of the last packet processed
 static u64 s_firstPCAPTS = 0;		// pcap timestamp (ns) of the first packet processed
 
@@ -235,11 +252,30 @@ static void ProcessUDP(Parquet_t* pq, u64 ts, IPv4Header_t* ipv4, UDPHeader_t* u
 {
 	s_totalUDP++;
 
-	// itch5 exchange traffic is identified by multicast group + port
-	if (Protocol_ITCH5PacketClassify(ntohl(ipv4->ipDst), ntohs(udp->portDst)))
+	// exchange traffic is identified by multicast group + port
+	switch (s_protocol)
 	{
-		s_totalITCH5++;
-		s_totalITCH5Msg += Protocol_ITCH5Decode(pq, ts, payload, payloadLen);
+	case PROTOCOL_ITCH5:
+		if (Protocol_ITCH5PacketClassify(ntohl(ipv4->ipDst), ntohs(udp->portDst)))
+		{
+			s_totalITCH5++;
+			s_totalITCH5Msg += Protocol_ITCH5Decode(pq, ts, payload, payloadLen);
+		}
+		break;
+
+	case PROTOCOL_OPRA6:
+	{
+		OPRA6Endpoint_t endpoint;
+		if (Protocol_OPRA6PacketClassify(ntohl(ipv4->ipDst), ntohs(udp->portDst), &endpoint))
+		{
+			s_totalOPRA6++;
+			s_totalOPRA6Msg += Protocol_OPRA6Decode(pq, ts, &endpoint, payload, payloadLen);
+		}
+	}
+	break;
+
+	default:
+		break;
 	}
 }
 
@@ -377,9 +413,12 @@ static void ProcessPacket(Parquet_t* pq, u64 ts, u8* payload, u32 length)
 //------------------------------------------------------------------------------
 static void usagePrint(const char* progName)
 {
-	fprintf(stderr, "usage: %s [-r <pcap file>] [-o <parquet file>]\n", progName);
+	fprintf(stderr, "usage: %s [-r <pcap file>] [-o <parquet file>] [-p <protocol>]\n", progName);
 	fprintf(stderr, "  -r <pcap file>     read from a pcap file (default: stdin)\n");
 	fprintf(stderr, "  -o <parquet file>  output parquet file (default: fmadio_markets.parquet)\n");
+	fprintf(stderr, "  -p <protocol>      protocol decoder (default: nasdaq_md_itch5)\n");
+	fprintf(stderr, "                       nasdaq_md_itch5 | itch5 : Nasdaq TotalView-ITCH 5.0\n");
+	fprintf(stderr, "                       opra_md_pillar6 | opra  : OPRA Pillar Binary v6\n");
 }
 
 //------------------------------------------------------------------------------
@@ -414,6 +453,31 @@ int main(int argc, char* argv[])
 				return 1;
 			}
 			parquetFileName = argv[i + 1];
+			i++;
+		}
+		else if (strcmp(argv[i], "-p") == 0)
+		{
+			if (i + 1 >= argc)
+			{
+				fprintf(stderr, "-p requires a protocol name\n");
+				usagePrint(argv[0]);
+				return 1;
+			}
+			const char* protocolName = argv[i + 1];
+			if ((strcmp(protocolName, "nasdaq_md_itch5") == 0) || (strcmp(protocolName, "itch5") == 0))
+			{
+				s_protocol = PROTOCOL_ITCH5;
+			}
+			else if ((strcmp(protocolName, "opra_md_pillar6") == 0) || (strcmp(protocolName, "opra") == 0))
+			{
+				s_protocol = PROTOCOL_OPRA6;
+			}
+			else
+			{
+				fprintf(stderr, "unknown protocol [%s]\n", protocolName);
+				usagePrint(argv[0]);
+				return 1;
+			}
 			i++;
 		}
 		else
@@ -474,8 +538,23 @@ int main(int argc, char* argv[])
 	}
 
 	// protocol specific schema
-	if (!Protocol_ITCH5SchemaCreate(&parquet))
+	switch (s_protocol)
 	{
+	case PROTOCOL_ITCH5:
+		if (!Protocol_ITCH5SchemaCreate(&parquet))
+		{
+			return 1;
+		}
+		break;
+
+	case PROTOCOL_OPRA6:
+		if (!Protocol_OPRA6SchemaCreate(&parquet))
+		{
+			return 1;
+		}
+		break;
+
+	default:
 		return 1;
 	}
 
@@ -538,8 +617,21 @@ int main(int argc, char* argv[])
 	fprintf(stderr, "  Pkt TCP  : %llu\n", s_totalTCP);
 	fprintf(stderr, "  Pkt UDP  : %llu\n", s_totalUDP);
 	fprintf(stderr, "  Pkt Other: %llu\n", s_totalOther);
-	fprintf(stderr, "  Pkt ITCH5: %llu\n", s_totalITCH5);
-	fprintf(stderr, "  Msg ITCH5: %llu\n", s_totalITCH5Msg);
+	switch (s_protocol)
+	{
+	case PROTOCOL_ITCH5:
+		fprintf(stderr, "  Pkt ITCH5: %llu\n", s_totalITCH5);
+		fprintf(stderr, "  Msg ITCH5: %llu\n", s_totalITCH5Msg);
+		break;
+
+	case PROTOCOL_OPRA6:
+		fprintf(stderr, "  Pkt OPRA6: %llu\n", s_totalOPRA6);
+		fprintf(stderr, "  Msg OPRA6: %llu\n", s_totalOPRA6Msg);
+		break;
+
+	default:
+		break;
+	}
 	fprintf(stderr, "  Duration : %.6f sec\n", durationNS / 1e9);
 	fprintf(stderr, "  Avg Rate : %.6f Gbps\n", avgGbps);
 	fprintf(stderr, "  Peak Rate: %.6f Gbps (1msec burst)\n", peakGbps);
