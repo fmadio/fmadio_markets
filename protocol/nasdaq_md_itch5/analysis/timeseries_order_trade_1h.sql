@@ -12,6 +12,8 @@
 --
 -- Usage: duckdb -f process/timeseries_order_trade_1m.sql
 
+SET enable_progress_bar = false;
+
 COPY
 (
 	SELECT
@@ -20,8 +22,8 @@ COPY
 		count(*) FILTER (WHERE msgType IN ('U', 'X'))                                     AS ordersModified,
 		count(*) FILTER (WHERE msgType = 'D')                                             AS ordersDeleted,
 		count(*) FILTER (WHERE msgType IN ('P', 'Q'))                                     AS trades,
-		sum(shares)               FILTER (WHERE msgType IN ('P', 'Q'))                    AS tradeShares,
-		sum(shares * coalesce(price, crossPrice)) FILTER (WHERE msgType IN ('P', 'Q'))    AS tradeNotional
+		coalesce(sum(shares)               FILTER (WHERE msgType IN ('P', 'Q')), 0)                    AS tradeShares,
+		coalesce(sum(shares * coalesce(price, crossPrice)) FILTER (WHERE msgType IN ('P', 'Q')), 0)    AS tradeNotional
 	FROM read_parquet('*.parq')
 	WHERE msgType IN ('A', 'F', 'U', 'X', 'D', 'P', 'Q')
 	GROUP BY 1

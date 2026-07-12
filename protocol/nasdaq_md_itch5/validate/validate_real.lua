@@ -15,14 +15,14 @@
 --      tool counts the 0xFFFF sentinel as 65535 real messages from a single
 --      packet / single pcap timestamp)
 --
--- usage: luajit validate_real.lua <decoder> <pcap[.zst]> <mdgap.csv[.zst]> <out.parquet>
+-- usage: luajit validate_real.lua <decoder> <pcap[.zst]> <mdgap.csv[.zst]> <out.parq>
 --
 ------------------------------------------------------------------------------
 
 local DECODER = arg[1] or "../../../src/fmadio_markets"
 local PCAP    = arg[2] or "../../../data/protocol/nasdaq_md_itch5/ny4-xnas-tvitch-20230822.pcap.zst"
 local CSV     = arg[3] or "../../../data/protocol/nasdaq_md_itch5/ny4-xnas-tvitch-20230822.pcap.mdgap.seqno.csv.zst"
-local PARQUET = arg[4] or "ny4-xnas-tvitch-20230822.parquet"
+local PARQUET = arg[4] or "ny4-xnas-tvitch-20230822.parq"
 
 print(string.format("decoder : %s", DECODER))
 print(string.format("pcap    : %s", PCAP))
@@ -73,7 +73,7 @@ print("[2/2] comparing against reference (large join, this can take minutes)...\
 
 local sql = string.format([[
 WITH c AS (SELECT column0 AS ts, column5 AS seq FROM read_csv('%s', header=false)),
-     p AS (SELECT pcapTS, moldSeqNo AS seq FROM '%s')
+     p AS (SELECT pcapTS, moldSeqNo AS seq FROM read_parquet('%s'))
 SELECT
   (SELECT count(*) FROM c),
   (SELECT count(*) FROM p),
@@ -122,7 +122,7 @@ if csvOnly == 0 then
 else
 	local sql2 = string.format([[
 WITH c AS (SELECT column0 AS ts, column5 AS seq FROM read_csv('%s', header=false)),
-     p AS (SELECT moldSeqNo AS seq FROM '%s'),
+     p AS (SELECT moldSeqNo AS seq FROM read_parquet('%s')),
      miss AS (SELECT c.ts, c.seq FROM c LEFT JOIN p USING(seq) WHERE p.seq IS NULL)
 SELECT count(*), count(DISTINCT ts), max(seq) - min(seq) + 1 FROM miss
 ]], CSV, PARQUET)

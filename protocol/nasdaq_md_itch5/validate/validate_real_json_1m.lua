@@ -25,7 +25,7 @@
 --
 ------------------------------------------------------------------------------
 
-local PARQUET = arg[1] or "ny4-xnas-tvitch-20230822.parquet"
+local PARQUET = arg[1] or "ny4-xnas-tvitch-20230822.parq"
 local JSON    = arg[2] or "../../../data/protocol/nasdaq_md_itch5/ny4-xnas-tvitch-20230822.pcap.tshark.json.1m.zst"
 local DECODER = arg[3]
 local PCAP    = arg[4]
@@ -291,7 +291,7 @@ WITH j AS (
          nullif(trim(marketparticipantstate),'') AS mpState
   FROM read_csv('%s', header=true)
 ),
-p AS (SELECT * FROM '%s')
+p AS (SELECT * FROM read_parquet('%s'))
 SELECT (SELECT count(*) FROM j), count(*), %s
 FROM j JOIN p ON j.session = p.moldSession AND j.seq = p.moldSeqNo
 ]], CSVOUT, PARQUET, table.concat(sums, ", "))

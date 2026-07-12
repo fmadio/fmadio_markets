@@ -12,9 +12,9 @@
 
 local DECODER = arg[1] or "../../../src/fmadio_markets"
 local PCAP    = arg[2] or "itch5_test.pcap"
-local PARQUET = arg[3] or "itch5_test.parquet"
+local PARQUET = arg[3] or "itch5_test.parq"
 
-local TBL = "'" .. PARQUET .. "'"
+local TBL = "read_parquet('" .. PARQUET .. "')"
 
 ------------------------------------------------------------------------------
 -- run the decoder

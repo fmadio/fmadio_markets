@@ -19,13 +19,13 @@ ROOT    = ../../..
 DECODER = $(ROOT)/src/fmadio_markets
 
 PCAP    = itch5_test.pcap
-PARQUET = itch5_test.parquet
+PARQUET = itch5_test.parq
 
 REAL_DIR     = $(ROOT)/data/protocol/nasdaq_md_itch5
 REAL_PCAP    = $(REAL_DIR)/ny4-xnas-tvitch-20230822.pcap.zst
 REAL_CSV     = $(REAL_DIR)/ny4-xnas-tvitch-20230822.pcap.mdgap.seqno.csv.zst
 REAL_JSON_1M = $(REAL_DIR)/ny4-xnas-tvitch-20230822.pcap.tshark.json.1m.zst
-REAL_PARQUET = ny4-xnas-tvitch-20230822.parquet
+REAL_PARQUET = ny4-xnas-tvitch-20230822.parq
 
 .PHONY: all test real json_1m decoder clean
 
