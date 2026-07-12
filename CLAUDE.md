@@ -239,7 +239,14 @@ engineering / fmadio).
                           run owning the single parquet table; default is
                           autodetect - first UDP packet matching a protocol
                           classifier locks in the decoder and creates its
-                          schema, no match at EOF = no parquet written)
+                          schema, no match at EOF = no parquet written),
+                          -t output rotation (off by default; libduckdb
+                          buffers the whole table in memory, so with -t the
+                          output is flushed and a new file started on every
+                          -t period boundary in pcap time, files named
+                          <stem>_<YYYYMMDD_HHMMSS UTC of window start><ext>,
+                          empty windows still write a file, -t 0 = no
+                          rotation, single file named exactly -o)
 - src/fTypes.h          - fixed width types (u8..u128 as unsigned long long
                           etc), kKB/kMB/kGB, k1E9, INLINE, clock_ns, rdtsc,
                           swap16/32/64/128, FormatTS, clock_date_t, ns2clock,
@@ -296,11 +303,15 @@ engineering / fmadio).
 - make                  -> src/fmadio_markets (gcc, -Wall -Wextra clean,
                           -I/usr/local/include -Isrc -Iprotocol/<each protocol>,
                           links -lduckdb from /usr/local/lib)
-- src/fmadio_markets -r <pcap> -o <out.parquet> [-p <protocol>]
+- src/fmadio_markets -r <pcap> -o <out.parquet> [-p <protocol>] [-t <sec>]
 - -p selects the decoder: auto (default, autodetects from multicast group +
   port classification), nasdaq_md_itch5 | itch5, or opra_md_pillar6 | opra
+- -t sets the output rotation period in seconds of pcap time (default: no
+  rotation, single file); each rotated file is <stem>_<YYYYMMDD_HHMMSS><ext>
+  with the UTC start of its period-aligned window; validation suites pass
+  -t 0 explicitly to pin the single-file behavior
 - summary on stderr: bytes/pkts/tcp/udp/other + per-protocol pkts/msgs
-  (Pkt ITCH5/Msg ITCH5 or Pkt OPRA6/Msg OPRA6), duration,
+  (Pkt ITCH5/Msg ITCH5 or Pkt OPRA6/Msg OPRA6), files written, duration,
   avg Gbps and peak Gbps (1 msec burst) from pcap timestamps
 - status line every 10 sec; wall clock checked only every 64K packets
   (STATUS_CHECK_MASK) because clock_gettime per packet is too slow

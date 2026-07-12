@@ -19,7 +19,7 @@ local TBL = "read_parquet('" .. PARQUET .. "')"
 ------------------------------------------------------------------------------
 -- run the decoder
 ------------------------------------------------------------------------------
-local cmd = string.format("%s -r %s -o %s 2>/dev/null", DECODER, PCAP, PARQUET)
+local cmd = string.format("%s -r %s -o %s -t 0 2>/dev/null", DECODER, PCAP, PARQUET)
 local ok = os.execute(cmd)
 if ok ~= 0 and ok ~= true then
 	print("FAIL: decoder did not run: " .. cmd)

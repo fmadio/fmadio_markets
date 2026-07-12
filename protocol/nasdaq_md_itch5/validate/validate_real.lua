@@ -36,9 +36,9 @@ os.remove(PARQUET)
 
 local cmd
 if PCAP:match("%.zstd?$") then
-	cmd = string.format("zstdcat %s | %s -o %s", PCAP, DECODER, PARQUET)
+	cmd = string.format("zstdcat %s | %s -o %s -t 0", PCAP, DECODER, PARQUET)
 else
-	cmd = string.format("%s -r %s -o %s", DECODER, PCAP, PARQUET)
+	cmd = string.format("%s -r %s -o %s -t 0", DECODER, PCAP, PARQUET)
 end
 
 print("\n[1/2] decoding: " .. cmd .. "\n")

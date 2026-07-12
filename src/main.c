@@ -34,6 +34,18 @@ typedef enum
 static Protocol_t s_protocol = PROTOCOL_AUTO;
 
 //------------------------------------------------------------------------------
+// output rotation: libduckdb buffers the entire table in memory until the
+// COPY on close, so with -t the output is flushed and a new parquet file
+// started on every rotation period boundary (pcap time). default is no
+// rotation (single output file)
+
+static const char* s_outputName = "fmadio_markets.parquet";		// -o output name (rotation inserts the window start time before the extension)
+static u64 s_rotatePeriodNS = 0;		// -t rotation period in nanoseconds, 0 = no rotation
+static u64 s_rotateBucket = 0;			// current rotation window index (pcap ts / period)
+static bool s_rotateBucketValid = false;	// window index is valid once the first packet is seen
+static u64 s_totalFile = 0;				// parquet files written
+
+//------------------------------------------------------------------------------
 // PCAP file format
 
 #define PCAP_MAGIC_USEC		0xa1b2c3d4		// timestamps in microseconds
@@ -126,12 +138,12 @@ typedef struct
 //------------------------------------------------------------------------------
 // parquetOpen: open the in-memory duckdb instance. The protocol specific
 // schema and appender are created by the protocol decoder (e.g.
-// Protocol_ITCH5SchemaCreate) after this call.
+// Protocol_ITCH5SchemaCreate) after this call. The output file name is only
+// needed on close, when the buffered table is written out.
 //------------------------------------------------------------------------------
-static bool parquetOpen(Parquet_t* pq, const char* fileName)
+static bool parquetOpen(Parquet_t* pq)
 {
 	memset(pq, 0, sizeof(Parquet_t));
-	pq->fileName = fileName;
 
 	if (duckdb_open(NULL, &pq->db) == DuckDBError)
 	{
@@ -144,14 +156,13 @@ static bool parquetOpen(Parquet_t* pq, const char* fileName)
 		return false;
 	}
 
-	fprintf(stderr, "parquet: writing to [%s]\n", pq->fileName);
 	return true;
 }
 
 //------------------------------------------------------------------------------
 // parquetClose: flush the appender and write the protocol table out as parquet
 //------------------------------------------------------------------------------
-static void parquetClose(Parquet_t* pq)
+static void parquetClose(Parquet_t* pq, const char* fileName)
 {
 	if (pq->appender)
 	{
@@ -162,23 +173,24 @@ static void parquetClose(Parquet_t* pq)
 	// no schema was ever created (autodetect found no protocol traffic)
 	if (pq->tableName == NULL)
 	{
-		fprintf(stderr, "parquet: no protocol detected, nothing written to [%s]\n", pq->fileName);
+		fprintf(stderr, "parquet: no protocol detected, nothing written to [%s]\n", fileName);
 		duckdb_disconnect(&pq->con);
 		duckdb_close(&pq->db);
 		return;
 	}
 
 	char sql[4096];
-	snprintf(sql, sizeof(sql), "COPY %s TO '%s' (FORMAT PARQUET)", pq->tableName, pq->fileName);
+	snprintf(sql, sizeof(sql), "COPY %s TO '%s' (FORMAT PARQUET)", pq->tableName, fileName);
 
 	duckdb_result result;
 	if (duckdb_query(pq->con, sql, &result) == DuckDBError)
 	{
-		fprintf(stderr, "parquet: failed to write [%s]: %s\n", pq->fileName, duckdb_result_error(&result));
+		fprintf(stderr, "parquet: failed to write [%s]: %s\n", fileName, duckdb_result_error(&result));
 	}
 	else
 	{
-		fprintf(stderr, "parquet: wrote [%s]\n", pq->fileName);
+		fprintf(stderr, "parquet: wrote [%s]\n", fileName);
+		s_totalFile++;
 	}
 	duckdb_destroy_result(&result);
 
@@ -286,6 +298,52 @@ static void protocolAutoDetect(Parquet_t* pq, u32 ipDst, u16 portDst)
 	if (!protocolSchemaCreate(pq))
 	{
 		fprintf(stderr, "protocol: failed to create [%s] parquet schema\n", protocolName);
+		exit(1);
+	}
+}
+
+//------------------------------------------------------------------------------
+// parquetFileNameBuild: output file name for the rotation window starting at
+// windowStartNS. the window start time (UTC) is inserted before the file
+// extension e.g. out.parquet -> out_20230822_133000.parquet. with rotation
+// disabled the -o name is used as is
+//------------------------------------------------------------------------------
+static const char* parquetFileNameBuild(u64 windowStartNS)
+{
+	if (s_rotatePeriodNS == 0)
+	{
+		return s_outputName;
+	}
+
+	// file extension = everything from the last '.' in the last path component
+	const char* ext = strrchr(s_outputName, '.');
+	if ((ext == NULL) || (strchr(ext, '/') != NULL))
+	{
+		ext = s_outputName + strlen(s_outputName);
+	}
+
+	static char name[4096];
+	clock_date_t c = ns2clock_utc(windowStartNS);
+	snprintf(name, sizeof(name), "%.*s_%04d%02d%02d_%02d%02d%02d%s", (int)(ext - s_outputName), s_outputName, c.year, c.month, c.day, c.hour, c.min, c.sec, ext);
+	return name;
+}
+
+//------------------------------------------------------------------------------
+// parquetRotate: flush the current rotation window out to its parquet file
+// and start a new window: fresh duckdb instance + protocol schema. only
+// called once a protocol has been selected (tableName != NULL)
+//------------------------------------------------------------------------------
+static void parquetRotate(Parquet_t* pq)
+{
+	parquetClose(pq, parquetFileNameBuild(s_rotateBucket * s_rotatePeriodNS));
+
+	if (!parquetOpen(pq))
+	{
+		exit(1);
+	}
+	if (!protocolSchemaCreate(pq))
+	{
+		fprintf(stderr, "parquet: failed to recreate the protocol schema on rotation\n");
 		exit(1);
 	}
 }
@@ -485,9 +543,12 @@ static void ProcessPacket(Parquet_t* pq, u64 ts, u8* payload, u32 length)
 //------------------------------------------------------------------------------
 static void usagePrint(const char* progName)
 {
-	fprintf(stderr, "usage: %s [-r <pcap file>] [-o <parquet file>] [-p <protocol>]\n", progName);
+	fprintf(stderr, "usage: %s [-r <pcap file>] [-o <parquet file>] [-p <protocol>] [-t <seconds>]\n", progName);
 	fprintf(stderr, "  -r <pcap file>     read from a pcap file (default: stdin)\n");
 	fprintf(stderr, "  -o <parquet file>  output parquet file (default: fmadio_markets.parquet)\n");
+	fprintf(stderr, "  -t <seconds>       output rotation period in pcap time (default: no rotation)\n");
+	fprintf(stderr, "                     a new file <name>_<YYYYMMDD_HHMMSS><ext> is written on\n");
+	fprintf(stderr, "                     every period boundary. 0 = single file named exactly -o\n");
 	fprintf(stderr, "  -p <protocol>      protocol decoder (default: auto)\n");
 	fprintf(stderr, "                       auto                    : autodetect from packet classification\n");
 	fprintf(stderr, "                       nasdaq_md_itch5 | itch5 : Nasdaq TotalView-ITCH 5.0\n");
@@ -503,7 +564,6 @@ int main(int argc, char* argv[])
 	fprintf(stderr, "\n");
 
 	const char* fileName = NULL;
-	const char* parquetFileName = "fmadio_markets.parquet";
 	for (s32 i = 1; i < argc; i++)
 	{
 		if (strcmp(argv[i], "-r") == 0)
@@ -525,7 +585,26 @@ int main(int argc, char* argv[])
 				usagePrint(argv[0]);
 				return 1;
 			}
-			parquetFileName = argv[i + 1];
+			s_outputName = argv[i + 1];
+			i++;
+		}
+		else if (strcmp(argv[i], "-t") == 0)
+		{
+			if (i + 1 >= argc)
+			{
+				fprintf(stderr, "-t requires a period in seconds\n");
+				usagePrint(argv[0]);
+				return 1;
+			}
+			char* endPtr = NULL;
+			u64 rotateSec = strtoull(argv[i + 1], &endPtr, 10);
+			if ((endPtr == argv[i + 1]) || (*endPtr != 0))
+			{
+				fprintf(stderr, "invalid rotation period [%s]\n", argv[i + 1]);
+				usagePrint(argv[0]);
+				return 1;
+			}
+			s_rotatePeriodNS = rotateSec * k1E9;
 			i++;
 		}
 		else if (strcmp(argv[i], "-p") == 0)
@@ -609,9 +688,17 @@ int main(int argc, char* argv[])
 
 	// parquet output, passed into the protocol decoders
 	Parquet_t parquet;
-	if (!parquetOpen(&parquet, parquetFileName))
+	if (!parquetOpen(&parquet))
 	{
 		return 1;
+	}
+	if (s_rotatePeriodNS > 0)
+	{
+		fprintf(stderr, "parquet: writing to [%s], new file every %llu sec\n", s_outputName, s_rotatePeriodNS / k1E9);
+	}
+	else
+	{
+		fprintf(stderr, "parquet: writing to [%s]\n", s_outputName);
 	}
 
 	// protocol specific schema. with autodetect the schema is created later,
@@ -654,6 +741,27 @@ int main(int argc, char* argv[])
 		// timestamp in nanoseconds since epoch
 		u64 ts = (u64)pkt.sec * k1E9 + (u64)pkt.subSec * timeScale;
 
+		// output rotation on pcap time period boundaries. rotation waits for
+		// a protocol to be selected (tableName set), until then only the
+		// window index is tracked
+		if (s_rotatePeriodNS > 0)
+		{
+			u64 bucket = ts / s_rotatePeriodNS;
+			if (!s_rotateBucketValid)
+			{
+				s_rotateBucket = bucket;
+				s_rotateBucketValid = true;
+			}
+			else if (bucket != s_rotateBucket)
+			{
+				if (parquet.tableName != NULL)
+				{
+					parquetRotate(&parquet);
+				}
+				s_rotateBucket = bucket;
+			}
+		}
+
 		ProcessPacket(&parquet, ts, buffer, pkt.lengthCapture);
 
 
@@ -681,6 +789,17 @@ int main(int argc, char* argv[])
 	double avgGbps = (durationNS > 0) ? (s_totalByte * 8.0) / durationNS : 0.0;
 	double peakGbps = (s_burstMaxByte * 8.0) / BURST_WINDOW_NS;
 
+	// flush the final rotation window. with rotation enabled but no packets
+	// seen there is no window start time, fall back to the plain -o name
+	if ((s_rotatePeriodNS > 0) && (s_rotateBucketValid))
+	{
+		parquetClose(&parquet, parquetFileNameBuild(s_rotateBucket * s_rotatePeriodNS));
+	}
+	else
+	{
+		parquetClose(&parquet, s_outputName);
+	}
+
 	fprintf(stderr, "Summary\n");
 	fprintf(stderr, "  Byte     : %llu\n", s_totalByte);
 	fprintf(stderr, "  Pkt      : %llu\n", s_totalPkt);
@@ -706,11 +825,10 @@ int main(int argc, char* argv[])
 	default:
 		break;
 	}
+	fprintf(stderr, "  Files    : %llu\n", s_totalFile);
 	fprintf(stderr, "  Duration : %.6f sec\n", durationNS / 1e9);
 	fprintf(stderr, "  Avg Rate : %.6f Gbps\n", avgGbps);
 	fprintf(stderr, "  Peak Rate: %.6f Gbps (1msec burst)\n", peakGbps);
-
-	parquetClose(&parquet);
 
 	free(buffer);
 	if (file != stdin)

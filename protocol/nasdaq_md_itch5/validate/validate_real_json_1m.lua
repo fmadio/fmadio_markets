@@ -45,7 +45,7 @@ else
 		print("FAIL: " .. PARQUET .. " missing; run 'make real' first or pass decoder + pcap")
 		os.exit(1)
 	end
-	local cmd = string.format("zstdcat %s | %s -o %s", PCAP, DECODER, PARQUET)
+	local cmd = string.format("zstdcat %s | %s -o %s -t 0", PCAP, DECODER, PARQUET)
 	print("decoding: " .. cmd)
 	local ok = os.execute(cmd)
 	if (ok ~= 0 and ok ~= true) or not io.open(PARQUET, "r") then

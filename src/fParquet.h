@@ -19,7 +19,6 @@ typedef struct
 	duckdb_database		db;			// in-memory duckdb instance
 	duckdb_connection	con;		// connection used for DDL and COPY
 	duckdb_appender		appender;	// fast row appender into the protocol table
-	const char*			fileName;	// output parquet file path
 	const char*			tableName;	// protocol table name, set by the protocol schema create
 
 } Parquet_t;
