@@ -236,7 +236,10 @@ engineering / fmadio).
                           ProcessUDP dispatch, stats + 10 sec status line,
                           parquet open/close, -o output option, -p protocol
                           selection (Protocol_t enum, one active decoder per
-                          run owning the single parquet table)
+                          run owning the single parquet table; default is
+                          autodetect - first UDP packet matching a protocol
+                          classifier locks in the decoder and creates its
+                          schema, no match at EOF = no parquet written)
 - src/fTypes.h          - fixed width types (u8..u128 as unsigned long long
                           etc), kKB/kMB/kGB, k1E9, INLINE, clock_ns, rdtsc,
                           swap16/32/64/128, FormatTS, clock_date_t, ns2clock,
@@ -294,8 +297,8 @@ engineering / fmadio).
                           -I/usr/local/include -Isrc -Iprotocol/<each protocol>,
                           links -lduckdb from /usr/local/lib)
 - src/fmadio_markets -r <pcap> -o <out.parquet> [-p <protocol>]
-- -p selects the decoder: nasdaq_md_itch5 | itch5 (default) or
-  opra_md_pillar6 | opra
+- -p selects the decoder: auto (default, autodetects from multicast group +
+  port classification), nasdaq_md_itch5 | itch5, or opra_md_pillar6 | opra
 - summary on stderr: bytes/pkts/tcp/udp/other + per-protocol pkts/msgs
   (Pkt ITCH5/Msg ITCH5 or Pkt OPRA6/Msg OPRA6), duration,
   avg Gbps and peak Gbps (1 msec burst) from pcap timestamps
@@ -306,8 +309,9 @@ engineering / fmadio).
 
 - one directory per protocol under protocol/; new protocol = decoder .c/.h +
   <protocol>.md reference doc + validate/ suite, wired into the Makefile,
-  main.c Protocol_t enum / -p parsing / ProcessUDP dispatch / schema create
-  switch / summary lines
+  main.c Protocol_t enum / -p parsing / ProcessUDP dispatch /
+  protocolSchemaCreate switch / protocolAutoDetect classifier chain /
+  summary lines
 - public functions prefixed Protocol_ e.g. Protocol_ITCH5Decode,
   Protocol_OPRA6Decode
 - decoder owns its parquet schema (flat, union of all protocol columns, NULL

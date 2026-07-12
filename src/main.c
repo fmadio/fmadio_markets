@@ -20,16 +20,18 @@
 
 //------------------------------------------------------------------------------
 // protocol selection: which decoder owns the parquet schema and receives
-// classified packets. selected on the command line with -p
+// classified packets. selected on the command line with -p, or autodetected
+// from the first UDP packet that matches a protocol classifier (default)
 
 typedef enum
 {
-	PROTOCOL_ITCH5 = 0,			// nasdaq_md_itch5 (default)
+	PROTOCOL_AUTO = 0,			// autodetect from packet classification (default)
+	PROTOCOL_ITCH5,				// nasdaq_md_itch5
 	PROTOCOL_OPRA6,				// opra_md_pillar6
 
 } Protocol_t;
 
-static Protocol_t s_protocol = PROTOCOL_ITCH5;
+static Protocol_t s_protocol = PROTOCOL_AUTO;
 
 //------------------------------------------------------------------------------
 // PCAP file format
@@ -157,6 +159,15 @@ static void parquetClose(Parquet_t* pq)
 		duckdb_appender_destroy(&pq->appender);
 	}
 
+	// no schema was ever created (autodetect found no protocol traffic)
+	if (pq->tableName == NULL)
+	{
+		fprintf(stderr, "parquet: no protocol detected, nothing written to [%s]\n", pq->fileName);
+		duckdb_disconnect(&pq->con);
+		duckdb_close(&pq->db);
+		return;
+	}
+
 	char sql[4096];
 	snprintf(sql, sizeof(sql), "COPY %s TO '%s' (FORMAT PARQUET)", pq->tableName, pq->fileName);
 
@@ -225,6 +236,61 @@ static void statusPrint(void)
 }
 
 //------------------------------------------------------------------------------
+// protocolSchemaCreate: create the parquet schema for the selected protocol
+//------------------------------------------------------------------------------
+static bool protocolSchemaCreate(Parquet_t* pq)
+{
+	switch (s_protocol)
+	{
+	case PROTOCOL_ITCH5:
+		return Protocol_ITCH5SchemaCreate(pq);
+
+	case PROTOCOL_OPRA6:
+		return Protocol_OPRA6SchemaCreate(pq);
+
+	default:
+		return false;
+	}
+}
+
+//------------------------------------------------------------------------------
+// protocolAutoDetect: match the UDP destination against every protocol
+// classifier. on the first hit the protocol is locked in for the rest of the
+// run and its parquet schema is created
+//------------------------------------------------------------------------------
+static void protocolAutoDetect(Parquet_t* pq, u32 ipDst, u16 portDst)
+{
+	const char* protocolName = NULL;
+
+	if (Protocol_ITCH5PacketClassify(ipDst, portDst))
+	{
+		s_protocol = PROTOCOL_ITCH5;
+		protocolName = "nasdaq_md_itch5";
+	}
+	else
+	{
+		OPRA6Endpoint_t endpoint;
+		if (Protocol_OPRA6PacketClassify(ipDst, portDst, &endpoint))
+		{
+			s_protocol = PROTOCOL_OPRA6;
+			protocolName = "opra_md_pillar6";
+		}
+	}
+
+	if (protocolName == NULL)
+	{
+		return;
+	}
+
+	fprintf(stderr, "protocol: autodetected [%s]\n", protocolName);
+	if (!protocolSchemaCreate(pq))
+	{
+		fprintf(stderr, "protocol: failed to create [%s] parquet schema\n", protocolName);
+		exit(1);
+	}
+}
+
+//------------------------------------------------------------------------------
 // ProcessTCP: handle a single TCP packet
 //   pq         - parquet output context
 //   ts         - timestamp in nanoseconds since epoch
@@ -251,6 +317,12 @@ static void ProcessTCP(Parquet_t* pq, u64 ts, IPv4Header_t* ipv4, TCPHeader_t* t
 static void ProcessUDP(Parquet_t* pq, u64 ts, IPv4Header_t* ipv4, UDPHeader_t* udp, u8* payload, u32 payloadLen)
 {
 	s_totalUDP++;
+
+	// no protocol selected yet: lock in the first classifier match
+	if (s_protocol == PROTOCOL_AUTO)
+	{
+		protocolAutoDetect(pq, ntohl(ipv4->ipDst), ntohs(udp->portDst));
+	}
 
 	// exchange traffic is identified by multicast group + port
 	switch (s_protocol)
@@ -416,7 +488,8 @@ static void usagePrint(const char* progName)
 	fprintf(stderr, "usage: %s [-r <pcap file>] [-o <parquet file>] [-p <protocol>]\n", progName);
 	fprintf(stderr, "  -r <pcap file>     read from a pcap file (default: stdin)\n");
 	fprintf(stderr, "  -o <parquet file>  output parquet file (default: fmadio_markets.parquet)\n");
-	fprintf(stderr, "  -p <protocol>      protocol decoder (default: nasdaq_md_itch5)\n");
+	fprintf(stderr, "  -p <protocol>      protocol decoder (default: auto)\n");
+	fprintf(stderr, "                       auto                    : autodetect from packet classification\n");
 	fprintf(stderr, "                       nasdaq_md_itch5 | itch5 : Nasdaq TotalView-ITCH 5.0\n");
 	fprintf(stderr, "                       opra_md_pillar6 | opra  : OPRA Pillar Binary v6\n");
 }
@@ -464,7 +537,11 @@ int main(int argc, char* argv[])
 				return 1;
 			}
 			const char* protocolName = argv[i + 1];
-			if ((strcmp(protocolName, "nasdaq_md_itch5") == 0) || (strcmp(protocolName, "itch5") == 0))
+			if (strcmp(protocolName, "auto") == 0)
+			{
+				s_protocol = PROTOCOL_AUTO;
+			}
+			else if ((strcmp(protocolName, "nasdaq_md_itch5") == 0) || (strcmp(protocolName, "itch5") == 0))
 			{
 				s_protocol = PROTOCOL_ITCH5;
 			}
@@ -537,25 +614,18 @@ int main(int argc, char* argv[])
 		return 1;
 	}
 
-	// protocol specific schema
-	switch (s_protocol)
+	// protocol specific schema. with autodetect the schema is created later,
+	// on the first UDP packet that matches a protocol classifier
+	if (s_protocol != PROTOCOL_AUTO)
 	{
-	case PROTOCOL_ITCH5:
-		if (!Protocol_ITCH5SchemaCreate(&parquet))
+		if (!protocolSchemaCreate(&parquet))
 		{
 			return 1;
 		}
-		break;
-
-	case PROTOCOL_OPRA6:
-		if (!Protocol_OPRA6SchemaCreate(&parquet))
-		{
-			return 1;
-		}
-		break;
-
-	default:
-		return 1;
+	}
+	else
+	{
+		fprintf(stderr, "protocol: autodetecting from packet classification\n");
 	}
 
 	// per-packet loop
@@ -627,6 +697,10 @@ int main(int argc, char* argv[])
 	case PROTOCOL_OPRA6:
 		fprintf(stderr, "  Pkt OPRA6: %llu\n", s_totalOPRA6);
 		fprintf(stderr, "  Msg OPRA6: %llu\n", s_totalOPRA6Msg);
+		break;
+
+	case PROTOCOL_AUTO:
+		fprintf(stderr, "  Protocol : none detected\n");
 		break;
 
 	default:
