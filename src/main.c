@@ -18,6 +18,17 @@
 #include "nasdaq_md_itch5.h"
 #include "opra_md_pillar6.h"
 
+//---------------------------------------------------------------------------------------------
+
+// 2026/7/xx : 1.1.0  : added nasdaq md totalview itch 5 
+// 2026/7/12 : 1.2.0  : added opra pillar 6 
+
+#define MARKETS_VERSION_MAJOR	1
+#define MARKETS_VERSION_MINOR	2
+#define MARKETS_VERSION_PATCH	0
+#define MARKETS_BUILD_TIME		(__DATE__ " " __TIME__)
+
+
 //------------------------------------------------------------------------------
 // protocol selection: which decoder owns the parquet schema and receives
 // classified packets. selected on the command line with -p, or autodetected
@@ -235,16 +246,33 @@ static u64 clockRealtimeNS(void)
 }
 
 //------------------------------------------------------------------------------
-// statusPrint: one-line processing status on stderr
+// statusPrint: one-line processing status on stderr. the Gbps rate is the
+// pcap bytes processed since the last status line per wall clock time, i.e.
+// how fast the decoder is chewing through the capture
 //------------------------------------------------------------------------------
 static void statusPrint(void)
 {
-	fprintf(stderr, "[%s]  Pkt:%10.2f %10.3f GB tcp %8llu udp %8llu\n", 
+	static u64 lastWallTS = 0;
+	static u64 lastByte = 0;
+
+	u64 wallTS = clockRealtimeNS();
+
+	double processGbps = 0.0;
+	if ((lastWallTS != 0) && (wallTS > lastWallTS))
+	{
+		// bits / nanoseconds == Gbits / seconds
+		processGbps = ((s_totalByte - lastByte) * 8.0) / (wallTS - lastWallTS);
+	}
+	lastWallTS = wallTS;
+	lastByte = s_totalByte;
+
+	fprintf(stderr, "[%s]  Pkt:%10.2f %10.3f GB tcp %8llu udp %8llu : %8.3f Gbps\n",
 			FormatTS(s_lastPCAPTS),
-			s_totalPkt/1e6, 
-			s_totalByte/1e9, 
-			s_totalTCP, 
-			s_totalUDP);
+			s_totalPkt/1e6,
+			s_totalByte/1e9,
+			s_totalTCP,
+			s_totalUDP,
+			processGbps);
 }
 
 //------------------------------------------------------------------------------
@@ -553,6 +581,7 @@ static void usagePrint(const char* progName)
 	fprintf(stderr, "                       auto                    : autodetect from packet classification\n");
 	fprintf(stderr, "                       nasdaq_md_itch5 | itch5 : Nasdaq TotalView-ITCH 5.0\n");
 	fprintf(stderr, "                       opra_md_pillar6 | opra  : OPRA Pillar Binary v6\n");
+	fprintf(stderr, "  -V | --version     print the version and exit\n");
 }
 
 //------------------------------------------------------------------------------
@@ -560,12 +589,22 @@ static void usagePrint(const char* progName)
 //------------------------------------------------------------------------------
 int main(int argc, char* argv[])
 {
-	fprintf(stderr, "fmadio_markets - market data pcap processor https://fmad.io\n");
-	fprintf(stderr, "\n");
+	printf("fmadio_markets  %d.%d.%d (%s) market pcap processing (https://fmad.io)\n",
+				MARKETS_VERSION_MAJOR,
+				MARKETS_VERSION_MINOR,
+				MARKETS_VERSION_PATCH,
+				MARKETS_BUILD_TIME);
 
 	const char* fileName = NULL;
 	for (s32 i = 1; i < argc; i++)
 	{
+
+		if (strcmp(argv[i], "-V") == 0 || strcmp(argv[i], "--version") == 0)
+		{
+			// already printed	
+			return 0;
+		}
+
 		if (strcmp(argv[i], "-r") == 0)
 		{
 			if (i + 1 >= argc)
