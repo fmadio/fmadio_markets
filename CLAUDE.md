@@ -225,8 +225,7 @@ parse_row_group(RowGroup* rg, Buffer* buf)
 # Project: fmadio_markets
 
 General purpose framework for decoding market data / order execution protocols
-from PCAP files into parquet, assisted by Claude. Owner: aaron@fmad.com (fmad
-engineering / fmadio).
+from PCAP files into parquet, assisted by Claude. 
 
 ## Layout
 
