@@ -119,13 +119,19 @@ ORDER  BY a.msg_seqNo;
 ## 7. Flat Parquet Schema (table "efilatency")
 
 15 shared capture layer columns (CAPTURE_SCHEMA_COLUMNS, appended via
-packetInfoAppend) + 2 message columns = 17 columns total.
+packetInfoAppend) + 3 ethernet header columns + 2 message columns = 20
+columns total. The ethernet columns are efilatency specific (NOT part of
+the shared capture schema): the transmission arms differ only in source
+MAC and capture trailer port, so the MAC identifies the arm directly.
 
-| # | Column        | Type   | Notes                                   |
-|---|---------------|--------|------------------------------------------|
-| 1-15 | frame_*    | -      | shared capture layer (src/fCapture.h)    |
-| 16 | msg_seqNo    | UINT64 | sequence number (payload offset 0)       |
-| 17 | msg_indicator| STRING | 1 character phase indicator (offset 8)   |
+| # | Column          | Type   | Notes                                      |
+|---|-----------------|--------|---------------------------------------------|
+| 1-15 | frame_*      | -      | shared capture layer (src/fCapture.h)       |
+| 16 | frame_macSrc   | STRING | source MAC, colon hex (arm A / arm B)       |
+| 17 | frame_macDst   | STRING | destination MAC, colon hex                  |
+| 18 | frame_etherType| UINT16 | outermost wire ethertype (0x0800 = 2048 untagged IPv4) |
+| 19 | msg_seqNo      | UINT64 | sequence number (payload offset 0)          |
+| 20 | msg_indicator  | STRING | 1 character phase indicator (offset 8)      |
 
 No hdr_* group: the protocol has no transport header and the classifier
 carries no endpoint context.

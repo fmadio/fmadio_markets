@@ -37,10 +37,10 @@ validation suites additionally use luajit and the duckdb CLI.
 ## Run
 
 ```
-src/fmadio_markets -r <capture.pcap> -o <out.parquet> [-p <protocol>]
+src/fmadio_markets -r <capture.pcap> -o <out.parq> [-p <protocol>]
 
   -r <pcap file>     read from a pcap file (default: stdin, e.g. zstdcat pcap.zst |)
-  -o <parquet file>  output parquet file (default: fmadio_markets.parquet)
+  -o <parquet file>  output parquet file (default: fmadio_markets.parq)
   -p <protocol>      nasdaq_md_itch5 | itch5 (default)
                      opra_md_pillar6 | opra
 ```

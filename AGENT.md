@@ -302,7 +302,7 @@ from PCAP files into parquet, assisted by Claude.
 - make                  -> src/fmadio_markets (gcc, -Wall -Wextra clean,
                           -I/usr/local/include -Isrc -Iprotocol/<each protocol>,
                           links -lduckdb from /usr/local/lib)
-- src/fmadio_markets -r <pcap> -o <out.parquet> [-p <protocol>] [-t <sec>]
+- src/fmadio_markets -r <pcap> -o <out.parq> [-p <protocol>] [-t <sec>]
 - -p selects the decoder: auto (default, autodetects from multicast group +
   port classification), nasdaq_md_itch5 | itch5, or opra_md_pillar6 | opra
 - -t sets the output rotation period in seconds of pcap time (default: no

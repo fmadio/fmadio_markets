@@ -549,6 +549,10 @@ static void ProcessPacket(Parquet_t* pq, u64 ts, u8* payload, u32 length, u64 pk
 
 	EtherHeader_t* ether = (EtherHeader_t*)payload;
 
+	memcpy(pkt.macSrc, ether->src, 6);
+	memcpy(pkt.macDst, ether->dst, 6);
+	pkt.etherType = ntohs(ether->proto);
+
 	u8* ptr = payload + sizeof(EtherHeader_t);
 	u8* end = payload + length;
 	u16 etherProto = ntohs(ether->proto);

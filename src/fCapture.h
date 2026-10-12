@@ -26,6 +26,12 @@ typedef struct
 {
 	u64		pcapTS;				// pcap timestamp, ns since epoch
 
+	// ethernet header
+	u8		macSrc[6];			// source MAC address
+	u8		macDst[6];			// destination MAC address
+	u16		etherType;			// outermost ethertype as on the wire, host byte order
+								// (0x8100/0x9100/0x88a8 when VLAN tagged, 0x0800 untagged IPv4)
+
 	// 5-tuple + vlan (host byte order)
 	u32		ipSrc;
 	u32		ipDst;
@@ -81,6 +87,12 @@ typedef struct
 static INLINE void ip4Str(u32 ip, char* dst)
 {
 	sprintf(dst, "%u.%u.%u.%u", (ip >> 24) & 0xff, (ip >> 16) & 0xff, (ip >> 8) & 0xff, ip & 0xff);
+}
+
+// colon separated hex string from a 6 byte MAC address (dst >= 18 bytes)
+static INLINE void macStr(const u8* mac, char* dst)
+{
+	sprintf(dst, "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
 // append the capture layer columns in exact CAPTURE_SCHEMA_COLUMNS order

@@ -34,6 +34,11 @@ static const ParquetColumn_t s_schema[] =
 {
 	// capture layer (5-tuple + vlan + arista 7130 trailer), see fCapture.h
 	CAPTURE_SCHEMA_COLUMNS
+	// ethernet header: the transmission arms differ only in source MAC (and
+	// capture trailer port), so the MAC identifies the arm without the trailer
+	{ "frame_macSrc",                       PARQUET_TYPE_STRING       },	// source MAC, arm A / arm B
+	{ "frame_macDst",                       PARQUET_TYPE_STRING       },	// destination MAC (broadcast on the reference capture)
+	{ "frame_etherType",                    PARQUET_TYPE_U16          },	// outermost wire ethertype (0x0800 untagged IPv4)
 	// message
 	{ "msg_seqNo",                          PARQUET_TYPE_U64          },	// sequence number, starts at 1, +1 per message (payload offset 0)
 	{ "msg_indicator",                      PARQUET_TYPE_STRING       },	// 1 char ASCII phase indicator, observed 'W' / 'N' (payload offset 8)
@@ -87,6 +92,14 @@ u32 Protocol_EFILATDecode(Parquet_t* pq, const PacketInfo_t* pkt, void* endpoint
 
 	// capture layer columns (see fCapture.h)
 	packetInfoAppend(pq, pkt);
+
+	// frame_macSrc / frame_macDst / frame_etherType
+	char mac[18];
+	macStr(pkt->macSrc, mac);
+	parquetAppendStr(pq, mac);
+	macStr(pkt->macDst, mac);
+	parquetAppendStr(pq, mac);
+	parquetAppendU16(pq, pkt->etherType);
 
 	// msg_seqNo
 	parquetAppendU64(pq, readBE64(payload + 0));
