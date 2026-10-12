@@ -15,101 +15,103 @@
 
 #include "fTypes.h"
 #include "fParquet.h"
+#include "parq.h"
 #include "nasdaq_md_itch5.h"
 
 #define ITCH5_TABLE_NAME	"itch"
 
 // flat schema: union of every column in the ITCH 5.0 protocol
-static const char* s_schemaSQL =
-	"CREATE TABLE " ITCH5_TABLE_NAME " ("
-	// capture / transport layer
-	"    pcapTS                       UBIGINT,"		// pcap timestamp, ns since epoch
-	"    moldSession                  VARCHAR,"		// MoldUDP64 session (10 alpha)
-	"    moldSeqNo                    UBIGINT,"		// MoldUDP64 sequence number of this message
-	"    msgType                      VARCHAR,"		// ITCH message type (1 alpha)
+static const ParquetColumn_t s_schema[] =
+{
+	// capture layer (5-tuple + vlan + arista 7130 trailer), see fCapture.h
+	CAPTURE_SCHEMA_COLUMNS
+	// transport layer
+	{ "hdr_session",                        PARQUET_TYPE_STRING       },	// MoldUDP64 session (10 alpha)
+	{ "hdr_seqNo",                          PARQUET_TYPE_U64          },	// MoldUDP64 sequence number of this message
+	{ "msg_type",                           PARQUET_TYPE_STRING       },	// ITCH message type (1 alpha)
 	// common ITCH header
-	"    stockLocate                  USMALLINT,"
-	"    trackingNumber               USMALLINT,"
-	"    timestampNS                  UBIGINT,"		// ns since midnight ET (48 bit)
+	{ "msg_stockLocate",                    PARQUET_TYPE_U16          },
+	{ "msg_trackingNumber",                 PARQUET_TYPE_U16          },
+	{ "msg_timestampNS",                    PARQUET_TYPE_U64          },	// ns since midnight ET (48 bit)
 	// S: System Event
-	"    eventCode                    VARCHAR,"
+	{ "msg_eventCode",                      PARQUET_TYPE_STRING       },
 	// R: Stock Directory
-	"    stock                        VARCHAR,"		// 8 alpha, space padding stripped
-	"    marketCategory               VARCHAR,"
-	"    financialStatusIndicator     VARCHAR,"
-	"    roundLotSize                 UINTEGER,"
-	"    roundLotsOnly                VARCHAR,"
-	"    issueClassification          VARCHAR,"
-	"    issueSubType                 VARCHAR,"
-	"    authenticity                 VARCHAR,"
-	"    shortSaleThresholdIndicator  VARCHAR,"
-	"    ipoFlag                      VARCHAR,"
-	"    luldReferencePriceTier       VARCHAR,"
-	"    etpFlag                      VARCHAR,"
-	"    etpLeverageFactor            UINTEGER,"
-	"    inverseIndicator             VARCHAR,"
+	{ "msg_stock",                          PARQUET_TYPE_STRING       },	// 8 alpha, space padding stripped
+	{ "msg_marketCategory",                 PARQUET_TYPE_STRING       },
+	{ "msg_financialStatusIndicator",       PARQUET_TYPE_STRING       },
+	{ "msg_roundLotSize",                   PARQUET_TYPE_U32          },
+	{ "msg_roundLotsOnly",                  PARQUET_TYPE_STRING       },
+	{ "msg_issueClassification",            PARQUET_TYPE_STRING       },
+	{ "msg_issueSubType",                   PARQUET_TYPE_STRING       },
+	{ "msg_authenticity",                   PARQUET_TYPE_STRING       },
+	{ "msg_shortSaleThresholdIndicator",    PARQUET_TYPE_STRING       },
+	{ "msg_ipoFlag",                        PARQUET_TYPE_STRING       },
+	{ "msg_luldReferencePriceTier",         PARQUET_TYPE_STRING       },
+	{ "msg_etpFlag",                        PARQUET_TYPE_STRING       },
+	{ "msg_etpLeverageFactor",              PARQUET_TYPE_U32          },
+	{ "msg_inverseIndicator",               PARQUET_TYPE_STRING       },
 	// H: Stock Trading Action
-	"    tradingState                 VARCHAR,"
-	"    tradingActionReason          VARCHAR,"
+	{ "msg_tradingState",                   PARQUET_TYPE_STRING       },
+	{ "msg_tradingActionReason",            PARQUET_TYPE_STRING       },
 	// Y: Reg SHO Restriction
-	"    regSHOAction                 VARCHAR,"
+	{ "msg_regSHOAction",                   PARQUET_TYPE_STRING       },
 	// L: Market Participant Position
-	"    mpid                         VARCHAR,"
-	"    primaryMarketMaker           VARCHAR,"
-	"    marketMakerMode              VARCHAR,"
-	"    marketParticipantState       VARCHAR,"
+	{ "msg_mpid",                           PARQUET_TYPE_STRING       },
+	{ "msg_primaryMarketMaker",             PARQUET_TYPE_STRING       },
+	{ "msg_marketMakerMode",                PARQUET_TYPE_STRING       },
+	{ "msg_marketParticipantState",         PARQUET_TYPE_STRING       },
 	// V/W: Market Wide Circuit Breaker
-	"    mwcbLevel1                   DECIMAL(20,8),"
-	"    mwcbLevel2                   DECIMAL(20,8),"
-	"    mwcbLevel3                   DECIMAL(20,8),"
-	"    mwcbBreachedLevel            VARCHAR,"
+	{ "msg_mwcbLevel1",                     PARQUET_TYPE_DECIMAL20_8  },
+	{ "msg_mwcbLevel2",                     PARQUET_TYPE_DECIMAL20_8  },
+	{ "msg_mwcbLevel3",                     PARQUET_TYPE_DECIMAL20_8  },
+	{ "msg_mwcbBreachedLevel",              PARQUET_TYPE_STRING       },
 	// K: IPO Quoting Period Update
-	"    ipoQuotationReleaseTime      UINTEGER,"		// seconds since midnight
-	"    ipoQuotationReleaseQualifier VARCHAR,"
-	"    ipoPrice                     DECIMAL(16,4),"
+	{ "msg_ipoQuotationReleaseTime",        PARQUET_TYPE_U32          },	// seconds since midnight
+	{ "msg_ipoQuotationReleaseQualifier",   PARQUET_TYPE_STRING       },
+	{ "msg_ipoPrice",                       PARQUET_TYPE_DECIMAL16_4  },
 	// J: LULD Auction Collar
-	"    auctionCollarReferencePrice  DECIMAL(16,4),"
-	"    upperAuctionCollarPrice      DECIMAL(16,4),"
-	"    lowerAuctionCollarPrice      DECIMAL(16,4),"
-	"    auctionCollarExtension       UINTEGER,"
+	{ "msg_auctionCollarReferencePrice",    PARQUET_TYPE_DECIMAL16_4  },
+	{ "msg_upperAuctionCollarPrice",        PARQUET_TYPE_DECIMAL16_4  },
+	{ "msg_lowerAuctionCollarPrice",        PARQUET_TYPE_DECIMAL16_4  },
+	{ "msg_auctionCollarExtension",         PARQUET_TYPE_U32          },
 	// h: Operational Halt
-	"    marketCode                   VARCHAR,"
-	"    operationalHaltAction        VARCHAR,"
+	{ "msg_marketCode",                     PARQUET_TYPE_STRING       },
+	{ "msg_operationalHaltAction",          PARQUET_TYPE_STRING       },
 	// A/F/E/C/X/D/U/P: order book messages
-	"    orderReferenceNumber         UBIGINT,"		// A F E C X D P
-	"    originalOrderReferenceNumber UBIGINT,"		// U
-	"    newOrderReferenceNumber      UBIGINT,"		// U
-	"    buySellIndicator             VARCHAR,"		// A F P
-	"    shares                       UBIGINT,"		// A F U P (4 byte), Q (8 byte)
-	"    price                        DECIMAL(16,4),"	// A F U P
-	"    attribution                  VARCHAR,"		// F, 4 alpha MPID
-	"    executedShares               UINTEGER,"		// E C
-	"    matchNumber                  UBIGINT,"		// E C P Q B
-	"    printable                    VARCHAR,"		// C
-	"    executionPrice               DECIMAL(16,4),"	// C
-	"    cancelledShares              UINTEGER,"		// X
+	{ "msg_orderReferenceNumber",           PARQUET_TYPE_U64          },	// A F E C X D P
+	{ "msg_originalOrderReferenceNumber",   PARQUET_TYPE_U64          },	// U
+	{ "msg_newOrderReferenceNumber",        PARQUET_TYPE_U64          },	// U
+	{ "msg_buySellIndicator",               PARQUET_TYPE_STRING       },	// A F P
+	{ "msg_shares",                         PARQUET_TYPE_U64          },	// A F U P (4 byte), Q (8 byte)
+	{ "msg_price",                          PARQUET_TYPE_DECIMAL16_4  },	// A F U P
+	{ "msg_attribution",                    PARQUET_TYPE_STRING       },	// F, 4 alpha MPID
+	{ "msg_executedShares",                 PARQUET_TYPE_U32          },	// E C
+	{ "msg_matchNumber",                    PARQUET_TYPE_U64          },	// E C P Q B
+	{ "msg_printable",                      PARQUET_TYPE_STRING       },	// C
+	{ "msg_executionPrice",                 PARQUET_TYPE_DECIMAL16_4  },	// C
+	{ "msg_cancelledShares",                PARQUET_TYPE_U32          },	// X
 	// Q: Cross Trade
-	"    crossPrice                   DECIMAL(16,4),"
-	"    crossType                    VARCHAR,"		// Q I
+	{ "msg_crossPrice",                     PARQUET_TYPE_DECIMAL16_4  },
+	{ "msg_crossType",                      PARQUET_TYPE_STRING       },	// Q I
 	// I: Net Order Imbalance Indicator
-	"    pairedShares                 UBIGINT,"
-	"    imbalanceShares              UBIGINT,"
-	"    imbalanceDirection           VARCHAR,"
-	"    farPrice                     DECIMAL(16,4),"
-	"    nearPrice                    DECIMAL(16,4),"
-	"    currentReferencePrice        DECIMAL(16,4),"
-	"    priceVariationIndicator      VARCHAR,"
+	{ "msg_pairedShares",                   PARQUET_TYPE_U64          },
+	{ "msg_imbalanceShares",                PARQUET_TYPE_U64          },
+	{ "msg_imbalanceDirection",             PARQUET_TYPE_STRING       },
+	{ "msg_farPrice",                       PARQUET_TYPE_DECIMAL16_4  },
+	{ "msg_nearPrice",                      PARQUET_TYPE_DECIMAL16_4  },
+	{ "msg_currentReferencePrice",          PARQUET_TYPE_DECIMAL16_4  },
+	{ "msg_priceVariationIndicator",        PARQUET_TYPE_STRING       },
 	// N: Retail Price Improvement Indicator
-	"    interestFlag                 VARCHAR,"
+	{ "msg_interestFlag",                   PARQUET_TYPE_STRING       },
 	// O: Direct Listing with Capital Raise
-	"    openEligibilityStatus        VARCHAR,"
-	"    minimumAllowablePrice        DECIMAL(16,4),"
-	"    maximumAllowablePrice        DECIMAL(16,4),"
-	"    nearExecutionPrice           DECIMAL(16,4),"
-	"    nearExecutionTimeNS          UBIGINT,"
-	"    lowerPriceRangeCollar        DECIMAL(16,4),"
-	"    upperPriceRangeCollar        DECIMAL(16,4)"
-	")";
+	{ "msg_openEligibilityStatus",          PARQUET_TYPE_STRING       },
+	{ "msg_minimumAllowablePrice",          PARQUET_TYPE_DECIMAL16_4  },
+	{ "msg_maximumAllowablePrice",          PARQUET_TYPE_DECIMAL16_4  },
+	{ "msg_nearExecutionPrice",             PARQUET_TYPE_DECIMAL16_4  },
+	{ "msg_nearExecutionTimeNS",            PARQUET_TYPE_U64          },
+	{ "msg_lowerPriceRangeCollar",          PARQUET_TYPE_DECIMAL16_4  },
+	{ "msg_upperPriceRangeCollar",          PARQUET_TYPE_DECIMAL16_4  },
+};
 
 //------------------------------------------------------------------------------
 // multicast endpoints for TotalView-ITCH 5.0 (Nasdaq, NTX, PSX)
@@ -162,8 +164,12 @@ static const ITCH5Endpoint_t s_itch5Endpoint[] =
 // TotalView-ITCH 5.0 multicast group + port. ipDst and portDst are host
 // byte order.
 //------------------------------------------------------------------------------
-bool Protocol_ITCH5PacketClassify(u32 ipDst, u16 portDst)
+bool Protocol_ITCH5PacketClassify(u32 ipSrc, u16 portSrc, u32 ipDst, u16 portDst, void* endpoint)
 {
+	(void)ipSrc;
+	(void)portSrc;
+	(void)endpoint;		// ITCH5 needs no endpoint context
+
 	for (u32 i = 0; i < ITCH5_ENDPOINT_COUNT; i++)
 	{
 		if ((s_itch5Endpoint[i].group == ipDst) && (s_itch5Endpoint[i].port == portDst))
@@ -269,7 +275,6 @@ enum
 typedef struct
 {
 	// common: always populated
-	u64		pcapTS;
 	char	moldSession[16];
 	u64		moldSeqNo;
 	char	msgType[2];
@@ -352,179 +357,162 @@ typedef struct
 //------------------------------------------------------------------------------
 // append helpers: NULL for empty strings / unset numeric fields
 //------------------------------------------------------------------------------
-static void appendStr(duckdb_appender a, const char* s)
-{
-	if (s[0])
-	{
-		duckdb_append_varchar(a, s);
-	}
-	else
-	{
-		duckdb_append_null(a);
-	}
-}
-
-static void appendU32Opt(duckdb_appender a, ITCH5Row_t* r, u32 bit, u32 v)
+static void appendU32Opt(Parquet_t* pq, ITCH5Row_t* r, u32 bit, u32 v)
 {
 	if (ROW_HAS(r, bit))
 	{
-		duckdb_append_uint32(a, v);
+		parquetAppendU32(pq, v);
 	}
 	else
 	{
-		duckdb_append_null(a);
+		parquetAppendNull(pq);
 	}
 }
 
-static void appendU64Opt(duckdb_appender a, ITCH5Row_t* r, u32 bit, u64 v)
+static void appendU64Opt(Parquet_t* pq, ITCH5Row_t* r, u32 bit, u64 v)
 {
 	if (ROW_HAS(r, bit))
 	{
-		duckdb_append_uint64(a, v);
+		parquetAppendU64(pq, v);
 	}
 	else
 	{
-		duckdb_append_null(a);
+		parquetAppendNull(pq);
 	}
 }
 
-static void appendDblOpt(duckdb_appender a, ITCH5Row_t* r, u32 bit, double v)
+static void appendDblOpt(Parquet_t* pq, ITCH5Row_t* r, u32 bit, double v)
 {
 	if (ROW_HAS(r, bit))
 	{
-		duckdb_append_double(a, v);
+		parquetAppendDouble(pq, v);
 	}
 	else
 	{
-		duckdb_append_null(a);
+		parquetAppendNull(pq);
 	}
 }
 
 //------------------------------------------------------------------------------
 // itch5RowAppend: write one decoded row in exact schema column order
 //------------------------------------------------------------------------------
-static bool itch5RowAppend(Parquet_t* pq, ITCH5Row_t* r)
+static bool itch5RowAppend(Parquet_t* pq, const PacketInfo_t* pkt, ITCH5Row_t* r)
 {
-	duckdb_appender a = pq->appender;
+	parquetRowBegin(pq);
 
-	duckdb_appender_begin_row(a);
+	// capture layer (5-tuple + vlan + arista 7130 trailer)
+	packetInfoAppend(pq, pkt);
 
-	// capture / transport layer
-	duckdb_append_uint64(a, r->pcapTS);
-	appendStr(a, r->moldSession);
-	duckdb_append_uint64(a, r->moldSeqNo);
-	duckdb_append_varchar(a, r->msgType);
+	// transport layer
+	parquetAppendStr(pq, r->moldSession);
+	parquetAppendU64(pq, r->moldSeqNo);
+	parquetAppendStr(pq, r->msgType);
 
 	// common ITCH header
-	duckdb_append_uint16(a, r->stockLocate);
-	duckdb_append_uint16(a, r->trackingNumber);
-	duckdb_append_uint64(a, r->timestampNS);
+	parquetAppendU16(pq, r->stockLocate);
+	parquetAppendU16(pq, r->trackingNumber);
+	parquetAppendU64(pq, r->timestampNS);
 
 	// S: System Event
-	appendStr(a, r->eventCode);
+	parquetAppendStr(pq, r->eventCode);
 
 	// R: Stock Directory
-	appendStr(a, r->stock);
-	appendStr(a, r->marketCategory);
-	appendStr(a, r->financialStatusIndicator);
-	appendU32Opt(a, r, ROW_ROUNDLOTSIZE, r->roundLotSize);
-	appendStr(a, r->roundLotsOnly);
-	appendStr(a, r->issueClassification);
-	appendStr(a, r->issueSubType);
-	appendStr(a, r->authenticity);
-	appendStr(a, r->shortSaleThresholdIndicator);
-	appendStr(a, r->ipoFlag);
-	appendStr(a, r->luldReferencePriceTier);
-	appendStr(a, r->etpFlag);
-	appendU32Opt(a, r, ROW_ETPLEVERAGEFACTOR, r->etpLeverageFactor);
-	appendStr(a, r->inverseIndicator);
+	parquetAppendStr(pq, r->stock);
+	parquetAppendStr(pq, r->marketCategory);
+	parquetAppendStr(pq, r->financialStatusIndicator);
+	appendU32Opt(pq, r, ROW_ROUNDLOTSIZE, r->roundLotSize);
+	parquetAppendStr(pq, r->roundLotsOnly);
+	parquetAppendStr(pq, r->issueClassification);
+	parquetAppendStr(pq, r->issueSubType);
+	parquetAppendStr(pq, r->authenticity);
+	parquetAppendStr(pq, r->shortSaleThresholdIndicator);
+	parquetAppendStr(pq, r->ipoFlag);
+	parquetAppendStr(pq, r->luldReferencePriceTier);
+	parquetAppendStr(pq, r->etpFlag);
+	appendU32Opt(pq, r, ROW_ETPLEVERAGEFACTOR, r->etpLeverageFactor);
+	parquetAppendStr(pq, r->inverseIndicator);
 
 	// H: Stock Trading Action
-	appendStr(a, r->tradingState);
-	appendStr(a, r->tradingActionReason);
+	parquetAppendStr(pq, r->tradingState);
+	parquetAppendStr(pq, r->tradingActionReason);
 
 	// Y: Reg SHO Restriction
-	appendStr(a, r->regSHOAction);
+	parquetAppendStr(pq, r->regSHOAction);
 
 	// L: Market Participant Position
-	appendStr(a, r->mpid);
-	appendStr(a, r->primaryMarketMaker);
-	appendStr(a, r->marketMakerMode);
-	appendStr(a, r->marketParticipantState);
+	parquetAppendStr(pq, r->mpid);
+	parquetAppendStr(pq, r->primaryMarketMaker);
+	parquetAppendStr(pq, r->marketMakerMode);
+	parquetAppendStr(pq, r->marketParticipantState);
 
 	// V/W: Market Wide Circuit Breaker
-	appendDblOpt(a, r, ROW_MWCBLEVEL1, r->mwcbLevel1);
-	appendDblOpt(a, r, ROW_MWCBLEVEL2, r->mwcbLevel2);
-	appendDblOpt(a, r, ROW_MWCBLEVEL3, r->mwcbLevel3);
-	appendStr(a, r->mwcbBreachedLevel);
+	appendDblOpt(pq, r, ROW_MWCBLEVEL1, r->mwcbLevel1);
+	appendDblOpt(pq, r, ROW_MWCBLEVEL2, r->mwcbLevel2);
+	appendDblOpt(pq, r, ROW_MWCBLEVEL3, r->mwcbLevel3);
+	parquetAppendStr(pq, r->mwcbBreachedLevel);
 
 	// K: IPO Quoting Period Update
-	appendU32Opt(a, r, ROW_IPOQUOTATIONRELEASETIME, r->ipoQuotationReleaseTime);
-	appendStr(a, r->ipoQuotationReleaseQualifier);
-	appendDblOpt(a, r, ROW_IPOPRICE, r->ipoPrice);
+	appendU32Opt(pq, r, ROW_IPOQUOTATIONRELEASETIME, r->ipoQuotationReleaseTime);
+	parquetAppendStr(pq, r->ipoQuotationReleaseQualifier);
+	appendDblOpt(pq, r, ROW_IPOPRICE, r->ipoPrice);
 
 	// J: LULD Auction Collar
-	appendDblOpt(a, r, ROW_AUCTIONCOLLARREFERENCEPRICE, r->auctionCollarReferencePrice);
-	appendDblOpt(a, r, ROW_UPPERAUCTIONCOLLARPRICE, r->upperAuctionCollarPrice);
-	appendDblOpt(a, r, ROW_LOWERAUCTIONCOLLARPRICE, r->lowerAuctionCollarPrice);
-	appendU32Opt(a, r, ROW_AUCTIONCOLLAREXTENSION, r->auctionCollarExtension);
+	appendDblOpt(pq, r, ROW_AUCTIONCOLLARREFERENCEPRICE, r->auctionCollarReferencePrice);
+	appendDblOpt(pq, r, ROW_UPPERAUCTIONCOLLARPRICE, r->upperAuctionCollarPrice);
+	appendDblOpt(pq, r, ROW_LOWERAUCTIONCOLLARPRICE, r->lowerAuctionCollarPrice);
+	appendU32Opt(pq, r, ROW_AUCTIONCOLLAREXTENSION, r->auctionCollarExtension);
 
 	// h: Operational Halt
-	appendStr(a, r->marketCode);
-	appendStr(a, r->operationalHaltAction);
+	parquetAppendStr(pq, r->marketCode);
+	parquetAppendStr(pq, r->operationalHaltAction);
 
 	// A/F/E/C/X/D/U/P: order book messages
-	appendU64Opt(a, r, ROW_ORDERREFERENCENUMBER, r->orderReferenceNumber);
-	appendU64Opt(a, r, ROW_ORIGINALORDERREFERENCENUMBER, r->originalOrderReferenceNumber);
-	appendU64Opt(a, r, ROW_NEWORDERREFERENCENUMBER, r->newOrderReferenceNumber);
-	appendStr(a, r->buySellIndicator);
-	appendU64Opt(a, r, ROW_SHARES, r->shares);
-	appendDblOpt(a, r, ROW_PRICE, r->price);
-	appendStr(a, r->attribution);
-	appendU32Opt(a, r, ROW_EXECUTEDSHARES, r->executedShares);
-	appendU64Opt(a, r, ROW_MATCHNUMBER, r->matchNumber);
-	appendStr(a, r->printable);
-	appendDblOpt(a, r, ROW_EXECUTIONPRICE, r->executionPrice);
-	appendU32Opt(a, r, ROW_CANCELLEDSHARES, r->cancelledShares);
+	appendU64Opt(pq, r, ROW_ORDERREFERENCENUMBER, r->orderReferenceNumber);
+	appendU64Opt(pq, r, ROW_ORIGINALORDERREFERENCENUMBER, r->originalOrderReferenceNumber);
+	appendU64Opt(pq, r, ROW_NEWORDERREFERENCENUMBER, r->newOrderReferenceNumber);
+	parquetAppendStr(pq, r->buySellIndicator);
+	appendU64Opt(pq, r, ROW_SHARES, r->shares);
+	appendDblOpt(pq, r, ROW_PRICE, r->price);
+	parquetAppendStr(pq, r->attribution);
+	appendU32Opt(pq, r, ROW_EXECUTEDSHARES, r->executedShares);
+	appendU64Opt(pq, r, ROW_MATCHNUMBER, r->matchNumber);
+	parquetAppendStr(pq, r->printable);
+	appendDblOpt(pq, r, ROW_EXECUTIONPRICE, r->executionPrice);
+	appendU32Opt(pq, r, ROW_CANCELLEDSHARES, r->cancelledShares);
 
 	// Q: Cross Trade
-	appendDblOpt(a, r, ROW_CROSSPRICE, r->crossPrice);
-	appendStr(a, r->crossType);
+	appendDblOpt(pq, r, ROW_CROSSPRICE, r->crossPrice);
+	parquetAppendStr(pq, r->crossType);
 
 	// I: Net Order Imbalance Indicator
-	appendU64Opt(a, r, ROW_PAIREDSHARES, r->pairedShares);
-	appendU64Opt(a, r, ROW_IMBALANCESHARES, r->imbalanceShares);
-	appendStr(a, r->imbalanceDirection);
-	appendDblOpt(a, r, ROW_FARPRICE, r->farPrice);
-	appendDblOpt(a, r, ROW_NEARPRICE, r->nearPrice);
-	appendDblOpt(a, r, ROW_CURRENTREFERENCEPRICE, r->currentReferencePrice);
-	appendStr(a, r->priceVariationIndicator);
+	appendU64Opt(pq, r, ROW_PAIREDSHARES, r->pairedShares);
+	appendU64Opt(pq, r, ROW_IMBALANCESHARES, r->imbalanceShares);
+	parquetAppendStr(pq, r->imbalanceDirection);
+	appendDblOpt(pq, r, ROW_FARPRICE, r->farPrice);
+	appendDblOpt(pq, r, ROW_NEARPRICE, r->nearPrice);
+	appendDblOpt(pq, r, ROW_CURRENTREFERENCEPRICE, r->currentReferencePrice);
+	parquetAppendStr(pq, r->priceVariationIndicator);
 
 	// N: Retail Price Improvement Indicator
-	appendStr(a, r->interestFlag);
+	parquetAppendStr(pq, r->interestFlag);
 
 	// O: Direct Listing with Capital Raise
-	appendStr(a, r->openEligibilityStatus);
-	appendDblOpt(a, r, ROW_MINIMUMALLOWABLEPRICE, r->minimumAllowablePrice);
-	appendDblOpt(a, r, ROW_MAXIMUMALLOWABLEPRICE, r->maximumAllowablePrice);
-	appendDblOpt(a, r, ROW_NEAREXECUTIONPRICE, r->nearExecutionPrice);
-	appendU64Opt(a, r, ROW_NEAREXECUTIONTIMENS, r->nearExecutionTimeNS);
-	appendDblOpt(a, r, ROW_LOWERPRICERANGECOLLAR, r->lowerPriceRangeCollar);
-	appendDblOpt(a, r, ROW_UPPERPRICERANGECOLLAR, r->upperPriceRangeCollar);
+	parquetAppendStr(pq, r->openEligibilityStatus);
+	appendDblOpt(pq, r, ROW_MINIMUMALLOWABLEPRICE, r->minimumAllowablePrice);
+	appendDblOpt(pq, r, ROW_MAXIMUMALLOWABLEPRICE, r->maximumAllowablePrice);
+	appendDblOpt(pq, r, ROW_NEAREXECUTIONPRICE, r->nearExecutionPrice);
+	appendU64Opt(pq, r, ROW_NEAREXECUTIONTIMENS, r->nearExecutionTimeNS);
+	appendDblOpt(pq, r, ROW_LOWERPRICERANGECOLLAR, r->lowerPriceRangeCollar);
+	appendDblOpt(pq, r, ROW_UPPERPRICERANGECOLLAR, r->upperPriceRangeCollar);
 
-	if (duckdb_appender_end_row(a) == DuckDBError)
-	{
-		fprintf(stderr, "itch5: append failed: %s\n", duckdb_appender_error(a));
-		return false;
-	}
-	return true;
+	return parquetRowEnd(pq);
 }
 
 //------------------------------------------------------------------------------
 // itch5MsgDecode: decode a single ITCH 5.0 message and append it as one row.
 // returns false if the message is unknown or too short
 //------------------------------------------------------------------------------
-static bool itch5MsgDecode(Parquet_t* pq, u64 pcapTS, const char* session, u64 seqNo, const u8* msg, u32 msgLen)
+static bool itch5MsgDecode(Parquet_t* pq, const PacketInfo_t* pkt, const char* session, u64 seqNo, const u8* msg, u32 msgLen)
 {
 	// common header: type(1) locate(2) tracking(2) timestamp(6)
 	if (msgLen < 11)
@@ -535,7 +523,6 @@ static bool itch5MsgDecode(Parquet_t* pq, u64 pcapTS, const char* session, u64 s
 	ITCH5Row_t row;
 	memset(&row, 0, sizeof(row));
 
-	row.pcapTS = pcapTS;
 	strncpy(row.moldSession, session, sizeof(row.moldSession) - 1);
 	row.moldSeqNo = seqNo;
 	row.msgType[0] = (char)msg[0];
@@ -792,7 +779,7 @@ static bool itch5MsgDecode(Parquet_t* pq, u64 pcapTS, const char* session, u64 s
 		return false;
 	}
 
-	return itch5RowAppend(pq, &row);
+	return itch5RowAppend(pq, pkt, &row);
 }
 
 //------------------------------------------------------------------------------
@@ -800,8 +787,10 @@ static bool itch5MsgDecode(Parquet_t* pq, u64 pcapTS, const char* session, u64 s
 // every contained ITCH message to the parquet table. returns the number of
 // messages decoded
 //------------------------------------------------------------------------------
-u32 Protocol_ITCH5Decode(Parquet_t* pq, u64 pcapTS, const u8* payload, u32 payloadLen)
+u32 Protocol_ITCH5Decode(Parquet_t* pq, const PacketInfo_t* pkt, void* endpoint, const u8* payload, u32 payloadLen)
 {
+	(void)endpoint;		// ITCH5 needs no endpoint context
+
 	// MoldUDP64 header: session(10) seqNo(8) msgCount(2)
 	if (payloadLen < 20)
 	{
@@ -837,7 +826,7 @@ u32 Protocol_ITCH5Decode(Parquet_t* pq, u64 pcapTS, const u8* payload, u32 paylo
 			break;
 		}
 
-		if (itch5MsgDecode(pq, pcapTS, session, seqNo + i, ptr, msgLen))
+		if (itch5MsgDecode(pq, pkt, session, seqNo + i, ptr, msgLen))
 		{
 			decoded++;
 		}
@@ -852,22 +841,27 @@ u32 Protocol_ITCH5Decode(Parquet_t* pq, u64 pcapTS, const u8* payload, u32 paylo
 //------------------------------------------------------------------------------
 bool Protocol_ITCH5SchemaCreate(Parquet_t* pq)
 {
-	duckdb_result result;
-	if (duckdb_query(pq->con, s_schemaSQL, &result) == DuckDBError)
-	{
-		fprintf(stderr, "itch5: failed to create schema: %s\n", duckdb_result_error(&result));
-		duckdb_destroy_result(&result);
-		return false;
-	}
-	duckdb_destroy_result(&result);
+	return parquetSchemaCreate(pq, ITCH5_TABLE_NAME, s_schema, sizeof(s_schema) / sizeof(s_schema[0]));
+}
 
-	pq->tableName = ITCH5_TABLE_NAME;
+//------------------------------------------------------------------------------
+// protocol registration: self registers at program start (see fProtocol.h),
+// main.c and the Makefile carry no per protocol knowledge
+//------------------------------------------------------------------------------
+static Protocol_t s_protocolDesc =
+{
+	.name         = "nasdaq_md_itch5",
+	.shortName    = "itch5",
+	.statsName    = "ITCH5",
+	.description  = "Nasdaq TotalView-ITCH 5.0",
+	.ipProto      = IPV4_PROTO_UDP,
+	.endpointSize = 0,
+	.schemaCreate = Protocol_ITCH5SchemaCreate,
+	.classify     = Protocol_ITCH5PacketClassify,
+	.decode       = Protocol_ITCH5Decode,
+};
 
-	if (duckdb_appender_create(pq->con, NULL, ITCH5_TABLE_NAME, &pq->appender) == DuckDBError)
-	{
-		fprintf(stderr, "itch5: failed to create appender\n");
-		return false;
-	}
-
-	return true;
+static void __attribute__((constructor)) itch5Register(void)
+{
+	Protocol_Register(&s_protocolDesc);
 }

@@ -52,7 +52,7 @@ end
 -- duckdb query helper: returns csv output, trimmed
 ------------------------------------------------------------------------------
 local function query(sql)
-	local p = assert(io.popen("duckdb -csv -noheader -c \"" .. sql .. "\" 2>&1"))
+	local p = assert(io.popen("duckdb -csv -noheader -c \"" .. sql:gsub('"', '\\"') .. "\" 2>&1"))
 	local out = p:read("*a")
 	p:close()
 	return (out:gsub("%s+$", ""))
@@ -73,7 +73,7 @@ print("[2/2] comparing against reference (large join, this can take minutes)...\
 
 local sql = string.format([[
 WITH c AS (SELECT column0 AS ts, column5 AS seq FROM read_csv('%s', header=false)),
-     p AS (SELECT pcapTS, moldSeqNo AS seq FROM read_parquet('%s'))
+     p AS (SELECT "frame_ts" AS pcapTS, "hdr_seqNo" AS seq FROM read_parquet('%s'))
 SELECT
   (SELECT count(*) FROM c),
   (SELECT count(*) FROM p),
@@ -122,7 +122,7 @@ if csvOnly == 0 then
 else
 	local sql2 = string.format([[
 WITH c AS (SELECT column0 AS ts, column5 AS seq FROM read_csv('%s', header=false)),
-     p AS (SELECT moldSeqNo AS seq FROM read_parquet('%s')),
+     p AS (SELECT "hdr_seqNo" AS seq FROM read_parquet('%s')),
      miss AS (SELECT c.ts, c.seq FROM c LEFT JOIN p USING(seq) WHERE p.seq IS NULL)
 SELECT count(*), count(DISTINCT ts), max(seq) - min(seq) + 1 FROM miss
 ]], CSV, PARQUET)

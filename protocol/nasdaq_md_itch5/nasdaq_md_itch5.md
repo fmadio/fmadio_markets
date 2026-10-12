@@ -449,114 +449,138 @@ Type mapping rules:
 
 ```sql
 CREATE TABLE itch (
-    -- capture / transport layer
-    pcapTS                       UBIGINT,        -- pcap timestamp, ns since epoch
-    moldSession                  VARCHAR,        -- MoldUDP64 session (10 alpha)
-    moldSeqNo                    UBIGINT,        -- MoldUDP64 sequence number of this message
-    msgType                      VARCHAR,        -- ITCH message type (1 alpha)
+    -- capture layer (shared across all protocol schemas, src/fCapture.h)
+    "frame_ts"                       UBIGINT,        -- pcap timestamp, ns since epoch
+    "frame_ipSrc"                    VARCHAR,        -- dotted quad
+    "frame_ipDst"                    VARCHAR,
+    "frame_portSrc"                  USMALLINT,
+    "frame_portDst"                  USMALLINT,
+    "frame_ipProto"                  UTINYINT,       -- 17 UDP, 6 TCP
+    "frame_vlanOuter"                USMALLINT,      -- outermost 802.1Q ID, NULL = untagged
+    "frame_vlanInner"                USMALLINT,      -- inner QinQ ID, NULL = single tagged / untagged
+    "frame_pbTS"                     UBIGINT,        -- arista 7130 trailer time, ns since epoch, NULL = no trailer
+    "frame_pbFlags"                  UTINYINT,       -- trailer flags, bit 0 = original FCS valid
+    "frame_pbDeviceID"               USMALLINT,      -- trailer capture device ID
+    "frame_pbPortID"                 UTINYINT,       -- trailer capture device port
+    "frame_hostname"                 VARCHAR,        -- capture device hostname (gethostname)
+    "frame_pkt_block"                UBIGINT,        -- FMAD capture side chunk id 0 for plain pcap input
+    "frame_pkt_offset"               UINTEGER,       -- byte offset in the stored chunk, 0 for pcap
+
+    -- transport layer
+    "hdr_session"                    VARCHAR,        -- MoldUDP64 session (10 alpha)
+    "hdr_seqNo"                      UBIGINT,        -- MoldUDP64 sequence number of this message
+    "msg_type"                       VARCHAR,        -- ITCH message type (1 alpha)
 
     -- common ITCH header (every message)
-    stockLocate                  USMALLINT,
-    trackingNumber               USMALLINT,
-    timestampNS                  UBIGINT,        -- ns since midnight ET (48-bit)
+    "msg_stockLocate"                USMALLINT,
+    "msg_trackingNumber"             USMALLINT,
+    "msg_timestampNS"                UBIGINT,        -- ns since midnight ET (48-bit)
 
     -- S: System Event
-    eventCode                    VARCHAR,
+    "msg_eventCode"                  VARCHAR,
 
     -- R: Stock Directory (stock column shared by R H Y L K J h A F P Q I N O)
-    stock                        VARCHAR,        -- 8 alpha, space padding stripped
-    marketCategory               VARCHAR,
-    financialStatusIndicator     VARCHAR,
-    roundLotSize                 UINTEGER,
-    roundLotsOnly                VARCHAR,
-    issueClassification          VARCHAR,
-    issueSubType                 VARCHAR,        -- 2 alpha
-    authenticity                 VARCHAR,
-    shortSaleThresholdIndicator  VARCHAR,
-    ipoFlag                      VARCHAR,
-    luldReferencePriceTier       VARCHAR,
-    etpFlag                      VARCHAR,
-    etpLeverageFactor            UINTEGER,
-    inverseIndicator             VARCHAR,
+    "msg_stock"                      VARCHAR,        -- 8 alpha, space padding stripped
+    "msg_marketCategory"             VARCHAR,
+    "msg_financialStatusIndicator"   VARCHAR,
+    "msg_roundLotSize"               UINTEGER,
+    "msg_roundLotsOnly"              VARCHAR,
+    "msg_issueClassification"        VARCHAR,
+    "msg_issueSubType"               VARCHAR,        -- 2 alpha
+    "msg_authenticity"               VARCHAR,
+    "msg_shortSaleThresholdIndicator"VARCHAR,
+    "msg_ipoFlag"                    VARCHAR,
+    "msg_luldReferencePriceTier"     VARCHAR,
+    "msg_etpFlag"                    VARCHAR,
+    "msg_etpLeverageFactor"          UINTEGER,
+    "msg_inverseIndicator"           VARCHAR,
 
     -- H: Stock Trading Action
-    tradingState                 VARCHAR,
-    tradingActionReason          VARCHAR,        -- 4 alpha
+    "msg_tradingState"               VARCHAR,
+    "msg_tradingActionReason"        VARCHAR,        -- 4 alpha
 
     -- Y: Reg SHO Restriction
-    regSHOAction                 VARCHAR,
+    "msg_regSHOAction"               VARCHAR,
 
     -- L: Market Participant Position
-    mpid                         VARCHAR,        -- 4 alpha
-    primaryMarketMaker           VARCHAR,
-    marketMakerMode              VARCHAR,
-    marketParticipantState       VARCHAR,
+    "msg_mpid"                       VARCHAR,        -- 4 alpha
+    "msg_primaryMarketMaker"         VARCHAR,
+    "msg_marketMakerMode"            VARCHAR,
+    "msg_marketParticipantState"     VARCHAR,
 
     -- V/W: Market Wide Circuit Breaker
-    mwcbLevel1                   DECIMAL(20,8),  -- Price(8)
-    mwcbLevel2                   DECIMAL(20,8),
-    mwcbLevel3                   DECIMAL(20,8),
-    mwcbBreachedLevel            VARCHAR,
+    "msg_mwcbLevel1"                 DECIMAL(20,8),  -- Price(8)
+    "msg_mwcbLevel2"                 DECIMAL(20,8),
+    "msg_mwcbLevel3"                 DECIMAL(20,8),
+    "msg_mwcbBreachedLevel"          VARCHAR,
 
     -- K: IPO Quoting Period Update
-    ipoQuotationReleaseTime      UINTEGER,       -- seconds since midnight
-    ipoQuotationReleaseQualifier VARCHAR,
-    ipoPrice                     DECIMAL(16,4),
+    "msg_ipoQuotationReleaseTime"    UINTEGER,       -- seconds since midnight
+    "msg_ipoQuotationReleaseQualifier"VARCHAR,
+    "msg_ipoPrice"                   DECIMAL(16,4),
 
     -- J: LULD Auction Collar
-    auctionCollarReferencePrice  DECIMAL(16,4),
-    upperAuctionCollarPrice      DECIMAL(16,4),
-    lowerAuctionCollarPrice      DECIMAL(16,4),
-    auctionCollarExtension       UINTEGER,
+    "msg_auctionCollarReferencePrice"DECIMAL(16,4),
+    "msg_upperAuctionCollarPrice"    DECIMAL(16,4),
+    "msg_lowerAuctionCollarPrice"    DECIMAL(16,4),
+    "msg_auctionCollarExtension"     UINTEGER,
 
     -- h: Operational Halt
-    marketCode                   VARCHAR,
-    operationalHaltAction        VARCHAR,
+    "msg_marketCode"                 VARCHAR,
+    "msg_operationalHaltAction"      VARCHAR,
 
     -- A/F/E/C/X/D/U/P: order book messages
-    orderReferenceNumber         UBIGINT,        -- A F E C X D P
-    originalOrderReferenceNumber UBIGINT,        -- U
-    newOrderReferenceNumber      UBIGINT,        -- U
-    buySellIndicator             VARCHAR,        -- A F P
-    shares                       UBIGINT,        -- A F U P (4 byte), Q (8 byte)
-    price                        DECIMAL(16,4),  -- A F U P
-    attribution                  VARCHAR,        -- F, 4 alpha MPID
-    executedShares               UINTEGER,       -- E C
-    matchNumber                  UBIGINT,        -- E C P Q B
-    printable                    VARCHAR,        -- C
-    executionPrice               DECIMAL(16,4),  -- C
-    cancelledShares              UINTEGER,       -- X
+    "msg_orderReferenceNumber"       UBIGINT,        -- A F E C X D P
+    "msg_originalOrderReferenceNumber"UBIGINT,        -- U
+    "msg_newOrderReferenceNumber"    UBIGINT,        -- U
+    "msg_buySellIndicator"           VARCHAR,        -- A F P
+    "msg_shares"                     UBIGINT,        -- A F U P (4 byte), Q (8 byte)
+    "msg_price"                      DECIMAL(16,4),  -- A F U P
+    "msg_attribution"                VARCHAR,        -- F, 4 alpha MPID
+    "msg_executedShares"             UINTEGER,       -- E C
+    "msg_matchNumber"                UBIGINT,        -- E C P Q B
+    "msg_printable"                  VARCHAR,        -- C
+    "msg_executionPrice"             DECIMAL(16,4),  -- C
+    "msg_cancelledShares"            UINTEGER,       -- X
 
     -- Q: Cross Trade (shares and matchNumber shared above)
-    crossPrice                   DECIMAL(16,4),
-    crossType                    VARCHAR,        -- Q I
+    "msg_crossPrice"                 DECIMAL(16,4),
+    "msg_crossType"                  VARCHAR,        -- Q I
 
     -- I: Net Order Imbalance Indicator
-    pairedShares                 UBIGINT,
-    imbalanceShares              UBIGINT,
-    imbalanceDirection           VARCHAR,
-    farPrice                     DECIMAL(16,4),
-    nearPrice                    DECIMAL(16,4),
-    currentReferencePrice        DECIMAL(16,4),
-    priceVariationIndicator      VARCHAR,
+    "msg_pairedShares"               UBIGINT,
+    "msg_imbalanceShares"            UBIGINT,
+    "msg_imbalanceDirection"         VARCHAR,
+    "msg_farPrice"                   DECIMAL(16,4),
+    "msg_nearPrice"                  DECIMAL(16,4),
+    "msg_currentReferencePrice"      DECIMAL(16,4),
+    "msg_priceVariationIndicator"    VARCHAR,
 
     -- N: Retail Price Improvement Indicator
-    interestFlag                 VARCHAR,
+    "msg_interestFlag"               VARCHAR,
 
     -- O: Direct Listing with Capital Raise
-    openEligibilityStatus        VARCHAR,
-    minimumAllowablePrice        DECIMAL(16,4),
-    maximumAllowablePrice        DECIMAL(16,4),
-    nearExecutionPrice           DECIMAL(16,4),
-    nearExecutionTimeNS          UBIGINT,
-    lowerPriceRangeCollar        DECIMAL(16,4),
-    upperPriceRangeCollar        DECIMAL(16,4)
+    "msg_openEligibilityStatus"      VARCHAR,
+    "msg_minimumAllowablePrice"      DECIMAL(16,4),
+    "msg_maximumAllowablePrice"      DECIMAL(16,4),
+    "msg_nearExecutionPrice"         DECIMAL(16,4),
+    "msg_nearExecutionTimeNS"        UBIGINT,
+    "msg_lowerPriceRangeCollar"      DECIMAL(16,4),
+    "msg_upperPriceRangeCollar"      DECIMAL(16,4)
 );
 ```
 
-71 columns total. Schema validated with DuckDB by creating the table and writing an
+85 columns total (71 protocol columns + 14 additional shared capture layer
+columns: 5-tuple, VLAN tags, arista 7130 trailer (NULL when absent) and
+hostname/pkt_block/pkt_offset provenance for capture side pcap extraction).
+Schema validated with DuckDB by creating the table and writing an
 empty Parquet file; resulting Parquet physical types:
 
+Column names are grouped by derivation: frame_* = the captured frame (pcap
+record, IP/UDP headers, VLAN tags, arista trailer, provenance), hdr_* = the
+MoldUDP64 transport header (session, sequence number), msg_* = the business message fields.
+No quoting is needed in duckdb queries, e.g.
+SELECT msg_type, frame_ts FROM ...; COLUMNS('msg_.*') selects a whole group.
 - UBIGINT   -> INT64 / UINT_64
 - UINTEGER  -> INT32 / UINT_32
 - USMALLINT -> INT32 / UINT_16
@@ -565,7 +589,7 @@ empty Parquet file; resulting Parquet physical types:
 
 ### Message type -> populated columns
 
-| Type | Columns (beyond pcapTS/moldSession/moldSeqNo/msgType/stockLocate/trackingNumber/timestampNS) |
+| Type | Columns (beyond the capture layer and moldSession/moldSeqNo/msgType/stockLocate/trackingNumber/timestampNS) |
 |------|-----------------------------------------------------------------------------------|
 | S    | eventCode |
 | R    | stock, marketCategory, financialStatusIndicator, roundLotSize, roundLotsOnly, issueClassification, issueSubType, authenticity, shortSaleThresholdIndicator, ipoFlag, luldReferencePriceTier, etpFlag, etpLeverageFactor, inverseIndicator |
