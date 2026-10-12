@@ -4,7 +4,7 @@
 //
 // EFI latency test packet protocol decoder.
 //
-// REVERSE ENGINEERED protocol (no vendor specification): fixed 64 byte UDP
+// protocol (no vendor specification): fixed 64 byte UDP
 // payload carrying a u64 big endian sequence number at offset 0 and a 1 byte
 // ASCII phase indicator at offset 8 ('W' = warmup, 'N' = normal, inferred),
 // zero padded to 64 bytes. each sequence number is transmitted on two paths
