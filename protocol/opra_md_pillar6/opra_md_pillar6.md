@@ -563,82 +563,106 @@ year columns for direct querying.
 
 ```sql
 CREATE TABLE opra (
-    -- capture / transport layer (every row)
-    pcapTS                 UBIGINT,        -- pcap timestamp, ns since epoch
-    lineNumber             USMALLINT,      -- OPRA line from classifier (1-96, 220, 201-204)
-    feedStream             VARCHAR,        -- 'A' or 'B' multicast stream
-    retransmission         VARCHAR,        -- 'V' if retransmitted block, else NULL
-    sessionIndicator       UTINYINT,       -- raw byte: 0 RTH, 1-5 GTH day, 0x58 ('X') OPRA generated GTH
-    blockTimestampNS       UBIGINT,        -- block timestamp, ns since epoch
-    blockSeqNo             UINTEGER,       -- block sequence number as transmitted
-    msgSeqNo               UINTEGER,       -- blockSeqNo + index of message within block
+    -- capture layer (shared across all protocol schemas, src/fCapture.h)
+    "frame_ts"                       UBIGINT,        -- pcap timestamp, ns since epoch
+    "frame_ipSrc"                    VARCHAR,        -- dotted quad
+    "frame_ipDst"                    VARCHAR,
+    "frame_portSrc"                  USMALLINT,
+    "frame_portDst"                  USMALLINT,
+    "frame_ipProto"                  UTINYINT,       -- 17 UDP, 6 TCP
+    "frame_vlanOuter"                USMALLINT,      -- outermost 802.1Q ID, NULL = untagged
+    "frame_vlanInner"                USMALLINT,      -- inner QinQ ID, NULL = single tagged / untagged
+    "frame_pbTS"                     UBIGINT,        -- arista 7130 trailer time, ns since epoch, NULL = no trailer
+    "frame_pbFlags"                  UTINYINT,       -- trailer flags, bit 0 = original FCS valid
+    "frame_pbDeviceID"               USMALLINT,      -- trailer capture device ID
+    "frame_pbPortID"                 UTINYINT,       -- trailer capture device port
+    "frame_hostname"                 VARCHAR,        -- capture device hostname (gethostname)
+    "frame_pkt_block"                UBIGINT,        -- FMAD capture side chunk id 0 for plain pcap input
+    "frame_pkt_offset"               UINTEGER,       -- byte offset in the stored chunk, 0 for pcap
+
+    -- transport layer (every row)
+    "hdr_lineNumber"                 USMALLINT,      -- OPRA line from classifier (1-96, 220, 201-204)
+    "hdr_feedStream"                 VARCHAR,        -- 'A' or 'B' multicast stream
+    "hdr_retransmission"             VARCHAR,        -- 'V' if retransmitted block, else NULL
+    "hdr_sessionIndicator"           UTINYINT,       -- raw byte: 0 RTH, 1-5 GTH day, 0x58 ('X') OPRA generated GTH
+    "hdr_blockTimestampNS"           UBIGINT,        -- block timestamp, ns since epoch
+    "hdr_blockSeqNo"                 UINTEGER,       -- block sequence number as transmitted
+    "hdr_msgSeqNo"                   UINTEGER,       -- blockSeqNo + index of message within block
 
     -- message header (every row)
-    participantId          VARCHAR,        -- exchange code (2.2)
-    msgCategory            VARCHAR,        -- a d f k q C H R Y
-    msgType                VARCHAR,        -- type within category (space kept as ' ')
-    msgIndicator           VARCHAR,        -- BBO indicator for k/q, else NULL
-    transactionId          UINTEGER,
-    participantRefNo       UINTEGER,
+    "msg_participantId"              VARCHAR,        -- exchange code (2.2)
+    "msg_category"                   VARCHAR,        -- a d f k q C H R Y
+    "msg_type"                       VARCHAR,        -- type within category (space kept as ' ')
+    "msg_indicator"                  VARCHAR,        -- BBO indicator for k/q, else NULL
+    "msg_transactionId"              UINTEGER,
+    "msg_participantRefNo"           UINTEGER,
 
     -- option series identity (a d f k q R)
-    symbol                 VARCHAR,        -- underlying symbol, space padding stripped
-    expirationMonthCode    VARCHAR,        -- raw A-X code
-    putCall                VARCHAR,        -- derived: 'C' or 'P'
-    expirationMonth        UTINYINT,       -- derived: 1-12
-    expirationDay          UTINYINT,       -- 1-31
-    expirationYear         USMALLINT,      -- derived: 2000 + raw
-    strikePrice            DECIMAL(20,8),
+    "msg_symbol"                     VARCHAR,        -- underlying symbol, space padding stripped
+    "msg_expirationMonthCode"        VARCHAR,        -- raw A-X code
+    "msg_putCall"                    VARCHAR,        -- derived: 'C' or 'P'
+    "msg_expirationMonth"            UTINYINT,       -- derived: 1-12
+    "msg_expirationDay"              UTINYINT,       -- 1-31
+    "msg_expirationYear"             USMALLINT,      -- derived: 2000 + raw
+    "msg_strikePrice"                DECIMAL(20,8),
 
     -- a: Equity and Index Last Sale
-    volume                 UINTEGER,       -- a (trade size), f (daily volume)
-    premiumPrice           DECIMAL(20,8),  -- trade price
-    tradeIdentifier        UINTEGER,       -- future use, currently 0
-    tradingSessionId       UTINYINT,       -- 0 regular, 1 extended
+    "msg_volume"                     UINTEGER,       -- a (trade size), f (daily volume)
+    "msg_premiumPrice"               DECIMAL(20,8),  -- trade price
+    "msg_tradeIdentifier"            UINTEGER,       -- future use, currently 0
+    "msg_tradingSessionId"           UTINYINT,       -- 0 regular, 1 extended
 
     -- d: Open Interest (also f)
-    openInterestVolume     UINTEGER,
+    "msg_openInterestVolume"         UINTEGER,
 
     -- f: Equity and Index End of Day Summary
-    openPrice              DECIMAL(20,8),
-    highPrice              DECIMAL(20,8),
-    lowPrice               DECIMAL(20,8),
-    lastPrice              DECIMAL(20,8),
-    netChange              DECIMAL(20,8),  -- signed
-    underlyingPrice        DECIMAL(20,8),
+    "msg_openPrice"                  DECIMAL(20,8),
+    "msg_highPrice"                  DECIMAL(20,8),
+    "msg_lowPrice"                   DECIMAL(20,8),
+    "msg_lastPrice"                  DECIMAL(20,8),
+    "msg_netChange"                  DECIMAL(20,8),  -- signed
+    "msg_underlyingPrice"            DECIMAL(20,8),
 
     -- k/q: Equity and Index Quote (bidPrice/offerPrice also f)
-    bidPrice               DECIMAL(20,8),
-    bidSize                UINTEGER,
-    offerPrice             DECIMAL(20,8),
-    offerSize              UINTEGER,
+    "msg_bidPrice"                   DECIMAL(20,8),
+    "msg_bidSize"                    UINTEGER,
+    "msg_offerPrice"                 DECIMAL(20,8),
+    "msg_offerSize"                  UINTEGER,
 
     -- k/q BBO appendages (NULL when no appendage)
-    bestBidParticipantId   VARCHAR,
-    bestBidPrice           DECIMAL(20,8),
-    bestBidSize            UINTEGER,
-    bestOfferParticipantId VARCHAR,
-    bestOfferPrice         DECIMAL(20,8),
-    bestOfferSize          UINTEGER,
+    "msg_bestBidParticipantId"       VARCHAR,
+    "msg_bestBidPrice"               DECIMAL(20,8),
+    "msg_bestBidSize"                UINTEGER,
+    "msg_bestOfferParticipantId"     VARCHAR,
+    "msg_bestOfferPrice"             DECIMAL(20,8),
+    "msg_bestOfferSize"              UINTEGER,
 
     -- C: Administrative
-    adminText              VARCHAR,        -- raw message data, printable ASCII
+    "msg_adminText"                  VARCHAR,        -- raw message data, printable ASCII
 
     -- R: Series Mapping
-    multicastLineNumber    USMALLINT,      -- assigned output line 1-96
+    "msg_multicastLineNumber"        USMALLINT,      -- assigned output line 1-96
 
     -- Y: Underlying Value
-    indexValue             DECIMAL(20,8),  -- type ' '
-    bidIndexValue          DECIMAL(20,8),  -- type 'I'
-    offerIndexValue        DECIMAL(20,8)   -- type 'I'
+    "msg_indexValue"                 DECIMAL(20,8),  -- type ' '
+    "msg_bidIndexValue"              DECIMAL(20,8),  -- type 'I'
+    "msg_offerIndexValue"            DECIMAL(20,8)   -- type 'I'
 );
 ```
 
-47 columns total.
+61 columns total (47 protocol columns + 14 additional shared capture layer
+columns: 5-tuple, VLAN tags, arista 7130 trailer (NULL when absent) and
+hostname/pkt_block/pkt_offset provenance for capture side pcap extraction).
 
+Column names are grouped by derivation: frame_* = the captured frame (pcap
+record, IP/UDP headers, VLAN tags, arista trailer, provenance), hdr_* = the
+OPRA transmission block header + classifier endpoint (line, stream, block seq/timestamp), msg_* = the business message fields.
+No quoting is needed in duckdb queries, e.g.
+SELECT msg_type, frame_ts FROM ...; COLUMNS('msg_.*') selects a whole group.
 ### Message category -> populated columns
 
-Beyond the 14 transport + message header columns (pcapTS .. participantRefNo),
+Beyond the capture layer, transport and message header columns (pcapTS ..
+participantRefNo),
 and with "series" = symbol, expirationMonthCode, putCall, expirationMonth,
 expirationDay, expirationYear, strikePrice:
 
@@ -791,19 +815,55 @@ against the parquet output via duckdb. Coverage:
   block (only messages before it are decodable - there is no per message
   length field to skip with)
 
-### 9.2 Real capture validation - Status: PENDING (no capture available)
+### 9.2 Real capture field-level cross-validation (make omi in validate/) - Status: PASS
 
-Once an OPRA capture plus third party reference exist under
-data/protocol/opra_md_pillar6/, mirror the ITCH5 methodology
-(nasdaq_md_itch5.md sections 9.2/9.3):
+Field-level cross-validation of a real OPRA capture against an independent
+decoder: tshark + the Open Markets Initiative wireshark lua dissector
+(omi-wireshark-lua/Siac/Opra/Output/Siac_Opra_Output_Obi_v6_3_a_Dissector.lua).
+validate_omi.lua is the REFERENCE EXAMPLE for OMI cross-validation of any
+decoder in this repo; its header documents the pipeline and how to adapt it
+to another protocol.
 
-1. **Sequence/timestamp cross-validation** against an independent per-message
-   reference, joined on (line, message sequence number). Watch for tool
-   disagreements on messages that do not consume sequence numbers (H/N Line
-   Integrity, H/C Start of Day) - the OPRA analog of the MoldUDP64
-   End-of-Session counting bug found in the ITCH validation.
-2. **Field-level cross-validation** against an independent dissector (e.g. the
-   Open Markets Initiative wireshark-lua OPRA dissector via
-   tshark -X lua_script:<file.lua>; prefer -T json or -T fields -E occurrence=a
-   over -T ek, see nasdaq_md_itch5.md 9.3 for the ek caveats), joined on
-   (line, sequence number), comparing all decoded columns.
+Input (make omi, override with REAL_PCAP= / OMI_PACKETS=):
+
+- source: databento ny4-opra-new-a-20230822T140000.pcap (production feed A,
+  lines 37-40, SPY range symbols, VLAN tagged)
+- slice: first 100,000 packets via
+  editcap -F pcap -r <source> omi_slice.pcap 1-100000
+- omi_slice.pcap md5 68765df11236682d293586b68b21804f, 100,000 packets,
+  177,013 messages (177,009 a/q + 4 H line integrity)
+
+Method: both tools decode the same slice; tshark output (-T fields
+-E occurrence=a, --disable-protocol kip) is flattened to one row per message
+and 26 fields per message are compared on the key (ipDst, portDst, msgSeqNo)
+where msgSeqNo = blockSeqNo + message index within the block, the same
+implicit numbering the decoder uses.
+
+Result: PASS - 177,009 / 177,009 compared messages fully match, zero field
+diffs, ~18 sec. Coverage: categories a and q, every BBO appendage variant
+(none, single bid M/N, single offer C/G, double O), denominator scaled
+prices, multi message blocks, block timestamps. The capture carries only
+lines 37-40 so no k (long quote) messages exist in the real data; the k
+flatten path is exercised by running validate_omi.lua against the synthetic
+pcap (11/11 a/k/q messages field-match; the run still reports FAIL because
+the synthetic negative packets are decoded by OMI's size-only heuristic and
+show as "missing from parquet" - the fmadio decoder rejects them by
+endpoint/version, which is the correct behavior).
+
+Known non-comparable items (tool limits, not decoder findings - see also
+doc/validation.md):
+
+- msg_tradingSessionId: OMI v6.3 keeps last sale bytes 39..42 as reserved
+- H control blocks: reuse the last transmitted seq number, consumed but not
+  compared (comparing them would collide with a real message key)
+- categories without a flatten branch (d f C R Y ...) end the block on the
+  tshark side; none appear in this capture
+
+### 9.3 Sequence/timestamp cross-validation - Status: PENDING (no reference)
+
+Once a third party per-message reference (mdgap style seq number csv) exists
+under data/protocol/opra_md_pillar6/, mirror nasdaq_md_itch5.md section 9.2:
+join on (line, message sequence number) and compare seq + pcap timestamp.
+Watch for tool disagreements on messages that do not consume sequence numbers
+(H/N Line Integrity, H/C Start of Day) - the OPRA analog of the MoldUDP64
+End-of-Session counting bug found in the ITCH validation.

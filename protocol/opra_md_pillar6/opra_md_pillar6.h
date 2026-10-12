@@ -10,6 +10,8 @@
 
 #include "fTypes.h"
 #include "fParquet.h"
+#include "fCapture.h"
+#include "fProtocol.h"
 
 // classification result: which OPRA line / stream / feed the UDP destination is
 typedef struct
@@ -25,8 +27,8 @@ bool Protocol_OPRA6SchemaCreate(Parquet_t* pq);
 
 // returns true if the UDP destination (host byte order) is an OPRA multicast
 // group + port, filling in the endpoint description
-bool Protocol_OPRA6PacketClassify(u32 ipDst, u16 portDst, OPRA6Endpoint_t* endpoint);
+bool Protocol_OPRA6PacketClassify(u32 ipSrc, u16 portSrc, u32 ipDst, u16 portDst, void* endpoint);
 
 // decodes one OPRA transmission block (UDP payload) writing every contained
 // message as a row into the parquet table. returns the message count decoded
-u32 Protocol_OPRA6Decode(Parquet_t* pq, u64 pcapTS, const OPRA6Endpoint_t* endpoint, const u8* payload, u32 payloadLen);
+u32 Protocol_OPRA6Decode(Parquet_t* pq, const PacketInfo_t* pkt, void* endpoint, const u8* payload, u32 payloadLen);

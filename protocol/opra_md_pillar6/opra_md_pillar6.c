@@ -16,72 +16,74 @@
 
 #include "fTypes.h"
 #include "fParquet.h"
+#include "parq.h"
 #include "opra_md_pillar6.h"
 
 #define OPRA6_TABLE_NAME	"opra"
 
 // flat schema: union of every column in the OPRA Pillar v6 protocol
-static const char* s_schemaSQL =
-	"CREATE TABLE " OPRA6_TABLE_NAME " ("
-	// capture / transport layer (every row)
-	"    pcapTS                 UBIGINT,"		// pcap timestamp, ns since epoch
-	"    lineNumber             USMALLINT,"		// OPRA line from classifier (1-96, 220-225, 201-204)
-	"    feedStream             VARCHAR,"		// 'A' or 'B' multicast stream
-	"    retransmission         VARCHAR,"		// 'V' if retransmitted block, else NULL
-	"    sessionIndicator       UTINYINT,"		// raw byte: 0 RTH, 1-5 GTH day, 0x58 ('X') OPRA generated GTH
-	"    blockTimestampNS       UBIGINT,"		// block timestamp, ns since epoch
-	"    blockSeqNo             UINTEGER,"		// block sequence number as transmitted
-	"    msgSeqNo               UINTEGER,"		// blockSeqNo + index of message within block
+static const ParquetColumn_t s_schema[] =
+{
+	// capture layer (5-tuple + vlan + arista 7130 trailer), see fCapture.h
+	CAPTURE_SCHEMA_COLUMNS
+	// transport layer (every row)
+	{ "hdr_lineNumber",                     PARQUET_TYPE_U16          },	// OPRA line from classifier (1-96, 220-225, 201-204)
+	{ "hdr_feedStream",                     PARQUET_TYPE_STRING       },	// 'A' or 'B' multicast stream
+	{ "hdr_retransmission",                 PARQUET_TYPE_STRING       },	// 'V' if retransmitted block, else NULL
+	{ "hdr_sessionIndicator",               PARQUET_TYPE_U8           },	// raw byte: 0 RTH, 1-5 GTH day, 0x58 ('X') OPRA generated GTH
+	{ "hdr_blockTimestampNS",               PARQUET_TYPE_U64          },	// block timestamp, ns since epoch
+	{ "hdr_blockSeqNo",                     PARQUET_TYPE_U32          },	// block sequence number as transmitted
+	{ "hdr_msgSeqNo",                       PARQUET_TYPE_U32          },	// blockSeqNo + index of message within block
 	// message header (every row)
-	"    participantId          VARCHAR,"		// exchange code
-	"    msgCategory            VARCHAR,"		// a d f k q C H R Y
-	"    msgType                VARCHAR,"		// type within category (space kept as ' ')
-	"    msgIndicator           VARCHAR,"		// BBO indicator for k/q, else NULL
-	"    transactionId          UINTEGER,"
-	"    participantRefNo       UINTEGER,"
+	{ "msg_participantId",                  PARQUET_TYPE_STRING       },	// exchange code
+	{ "msg_category",                       PARQUET_TYPE_STRING       },	// a d f k q C H R Y
+	{ "msg_type",                           PARQUET_TYPE_STRING       },	// type within category (space kept as ' ')
+	{ "msg_indicator",                      PARQUET_TYPE_STRING       },	// BBO indicator for k/q, else NULL
+	{ "msg_transactionId",                  PARQUET_TYPE_U32          },
+	{ "msg_participantRefNo",               PARQUET_TYPE_U32          },
 	// option series identity (a d f k q R)
-	"    symbol                 VARCHAR,"		// underlying symbol, space padding stripped
-	"    expirationMonthCode    VARCHAR,"		// raw A-X code
-	"    putCall                VARCHAR,"		// derived: 'C' or 'P'
-	"    expirationMonth        UTINYINT,"		// derived: 1-12
-	"    expirationDay          UTINYINT,"		// 1-31
-	"    expirationYear         USMALLINT,"		// derived: 2000 + raw
-	"    strikePrice            DECIMAL(20,8),"
+	{ "msg_symbol",                         PARQUET_TYPE_STRING       },	// underlying symbol, space padding stripped
+	{ "msg_expirationMonthCode",            PARQUET_TYPE_STRING       },	// raw A-X code
+	{ "msg_putCall",                        PARQUET_TYPE_STRING       },	// derived: 'C' or 'P'
+	{ "msg_expirationMonth",                PARQUET_TYPE_U8           },	// derived: 1-12
+	{ "msg_expirationDay",                  PARQUET_TYPE_U8           },	// 1-31
+	{ "msg_expirationYear",                 PARQUET_TYPE_U16          },	// derived: 2000 + raw
+	{ "msg_strikePrice",                    PARQUET_TYPE_DECIMAL20_8  },
 	// a: Equity and Index Last Sale
-	"    volume                 UINTEGER,"		// a (trade size), f (daily volume)
-	"    premiumPrice           DECIMAL(20,8),"	// trade price
-	"    tradeIdentifier        UINTEGER,"		// future use, currently 0
-	"    tradingSessionId       UTINYINT,"		// 0 regular, 1 extended
+	{ "msg_volume",                         PARQUET_TYPE_U32          },	// a (trade size), f (daily volume)
+	{ "msg_premiumPrice",                   PARQUET_TYPE_DECIMAL20_8  },	// trade price
+	{ "msg_tradeIdentifier",                PARQUET_TYPE_U32          },	// future use, currently 0
+	{ "msg_tradingSessionId",               PARQUET_TYPE_U8           },	// 0 regular, 1 extended
 	// d: Open Interest (also f)
-	"    openInterestVolume     UINTEGER,"
+	{ "msg_openInterestVolume",             PARQUET_TYPE_U32          },
 	// f: Equity and Index End of Day Summary
-	"    openPrice              DECIMAL(20,8),"
-	"    highPrice              DECIMAL(20,8),"
-	"    lowPrice               DECIMAL(20,8),"
-	"    lastPrice              DECIMAL(20,8),"
-	"    netChange              DECIMAL(20,8),"	// signed
-	"    underlyingPrice        DECIMAL(20,8),"
+	{ "msg_openPrice",                      PARQUET_TYPE_DECIMAL20_8  },
+	{ "msg_highPrice",                      PARQUET_TYPE_DECIMAL20_8  },
+	{ "msg_lowPrice",                       PARQUET_TYPE_DECIMAL20_8  },
+	{ "msg_lastPrice",                      PARQUET_TYPE_DECIMAL20_8  },
+	{ "msg_netChange",                      PARQUET_TYPE_DECIMAL20_8  },	// signed
+	{ "msg_underlyingPrice",                PARQUET_TYPE_DECIMAL20_8  },
 	// k/q: Equity and Index Quote (bidPrice/offerPrice also f)
-	"    bidPrice               DECIMAL(20,8),"
-	"    bidSize                UINTEGER,"
-	"    offerPrice             DECIMAL(20,8),"
-	"    offerSize              UINTEGER,"
+	{ "msg_bidPrice",                       PARQUET_TYPE_DECIMAL20_8  },
+	{ "msg_bidSize",                        PARQUET_TYPE_U32          },
+	{ "msg_offerPrice",                     PARQUET_TYPE_DECIMAL20_8  },
+	{ "msg_offerSize",                      PARQUET_TYPE_U32          },
 	// k/q BBO appendages (NULL when no appendage)
-	"    bestBidParticipantId   VARCHAR,"
-	"    bestBidPrice           DECIMAL(20,8),"
-	"    bestBidSize            UINTEGER,"
-	"    bestOfferParticipantId VARCHAR,"
-	"    bestOfferPrice         DECIMAL(20,8),"
-	"    bestOfferSize          UINTEGER,"
+	{ "msg_bestBidParticipantId",           PARQUET_TYPE_STRING       },
+	{ "msg_bestBidPrice",                   PARQUET_TYPE_DECIMAL20_8  },
+	{ "msg_bestBidSize",                    PARQUET_TYPE_U32          },
+	{ "msg_bestOfferParticipantId",         PARQUET_TYPE_STRING       },
+	{ "msg_bestOfferPrice",                 PARQUET_TYPE_DECIMAL20_8  },
+	{ "msg_bestOfferSize",                  PARQUET_TYPE_U32          },
 	// C: Administrative
-	"    adminText              VARCHAR,"		// raw message data, printable ASCII
+	{ "msg_adminText",                      PARQUET_TYPE_STRING       },	// raw message data, printable ASCII
 	// R: Series Mapping
-	"    multicastLineNumber    USMALLINT,"		// assigned output line 1-96
+	{ "msg_multicastLineNumber",            PARQUET_TYPE_U16          },	// assigned output line 1-96
 	// Y: Underlying Value
-	"    indexValue             DECIMAL(20,8),"	// type ' '
-	"    bidIndexValue          DECIMAL(20,8),"	// type 'I'
-	"    offerIndexValue        DECIMAL(20,8)"	// type 'I'
-	")";
+	{ "msg_indexValue",                     PARQUET_TYPE_DECIMAL20_8  },	// type ' '
+	{ "msg_bidIndexValue",                  PARQUET_TYPE_DECIMAL20_8  },	// type 'I'
+	{ "msg_offerIndexValue",                PARQUET_TYPE_DECIMAL20_8  },	// type 'I'
+};
 
 //------------------------------------------------------------------------------
 // Protocol_OPRA6PacketClassify: OPRA multicast addressing is fully patterned
@@ -119,8 +121,13 @@ static u16 opra6RegularLine(u32 octet)
 	return 0;
 }
 
-bool Protocol_OPRA6PacketClassify(u32 ipDst, u16 portDst, OPRA6Endpoint_t* endpoint)
+bool Protocol_OPRA6PacketClassify(u32 ipSrc, u16 portSrc, u32 ipDst, u16 portDst, void* endpointArg)
 {
+	(void)ipSrc;
+	(void)portSrc;
+
+	OPRA6Endpoint_t* endpoint = (OPRA6Endpoint_t*)endpointArg;
+
 	u32 subnet = ipDst & 0xffffff00;
 	u32 octet  = ipDst & 0xff;
 
@@ -337,8 +344,7 @@ enum
 
 typedef struct
 {
-	// capture / transport: always populated
-	u64		pcapTS;
+	// transport: always populated
 	u16		lineNumber;
 	char	feedStream[2];
 	char	retransmission[2];			// empty == NULL (original transmission)
@@ -399,150 +405,133 @@ typedef struct
 //------------------------------------------------------------------------------
 // append helpers: NULL for empty strings / unset numeric fields
 //------------------------------------------------------------------------------
-static void appendStr(duckdb_appender a, const char* s)
-{
-	if (s[0])
-	{
-		duckdb_append_varchar(a, s);
-	}
-	else
-	{
-		duckdb_append_null(a);
-	}
-}
-
-static void appendU8Opt(duckdb_appender a, OPRA6Row_t* r, u32 bit, u8 v)
+static void appendU8Opt(Parquet_t* pq, OPRA6Row_t* r, u32 bit, u8 v)
 {
 	if (ROW_HAS(r, bit))
 	{
-		duckdb_append_uint8(a, v);
+		parquetAppendU8(pq, v);
 	}
 	else
 	{
-		duckdb_append_null(a);
+		parquetAppendNull(pq);
 	}
 }
 
-static void appendU16Opt(duckdb_appender a, OPRA6Row_t* r, u32 bit, u16 v)
+static void appendU16Opt(Parquet_t* pq, OPRA6Row_t* r, u32 bit, u16 v)
 {
 	if (ROW_HAS(r, bit))
 	{
-		duckdb_append_uint16(a, v);
+		parquetAppendU16(pq, v);
 	}
 	else
 	{
-		duckdb_append_null(a);
+		parquetAppendNull(pq);
 	}
 }
 
-static void appendU32Opt(duckdb_appender a, OPRA6Row_t* r, u32 bit, u32 v)
+static void appendU32Opt(Parquet_t* pq, OPRA6Row_t* r, u32 bit, u32 v)
 {
 	if (ROW_HAS(r, bit))
 	{
-		duckdb_append_uint32(a, v);
+		parquetAppendU32(pq, v);
 	}
 	else
 	{
-		duckdb_append_null(a);
+		parquetAppendNull(pq);
 	}
 }
 
-static void appendDblOpt(duckdb_appender a, OPRA6Row_t* r, u32 bit, double v)
+static void appendDblOpt(Parquet_t* pq, OPRA6Row_t* r, u32 bit, double v)
 {
 	if (ROW_HAS(r, bit))
 	{
-		duckdb_append_double(a, v);
+		parquetAppendDouble(pq, v);
 	}
 	else
 	{
-		duckdb_append_null(a);
+		parquetAppendNull(pq);
 	}
 }
 
 //------------------------------------------------------------------------------
 // opra6RowAppend: write one decoded row in exact schema column order
 //------------------------------------------------------------------------------
-static bool opra6RowAppend(Parquet_t* pq, OPRA6Row_t* r)
+static bool opra6RowAppend(Parquet_t* pq, const PacketInfo_t* pkt, OPRA6Row_t* r)
 {
-	duckdb_appender a = pq->appender;
+	parquetRowBegin(pq);
 
-	duckdb_appender_begin_row(a);
+	// capture layer (5-tuple + vlan + arista 7130 trailer)
+	packetInfoAppend(pq, pkt);
 
-	// capture / transport layer
-	duckdb_append_uint64(a, r->pcapTS);
-	duckdb_append_uint16(a, r->lineNumber);
-	duckdb_append_varchar(a, r->feedStream);
-	appendStr(a, r->retransmission);
-	duckdb_append_uint8(a, r->sessionIndicator);
-	duckdb_append_uint64(a, r->blockTimestampNS);
-	duckdb_append_uint32(a, r->blockSeqNo);
-	duckdb_append_uint32(a, r->msgSeqNo);
+	// transport layer
+	parquetAppendU16(pq, r->lineNumber);
+	parquetAppendStr(pq, r->feedStream);
+	parquetAppendStr(pq, r->retransmission);
+	parquetAppendU8(pq, r->sessionIndicator);
+	parquetAppendU64(pq, r->blockTimestampNS);
+	parquetAppendU32(pq, r->blockSeqNo);
+	parquetAppendU32(pq, r->msgSeqNo);
 
 	// message header
-	duckdb_append_varchar(a, r->participantId);
-	duckdb_append_varchar(a, r->msgCategory);
-	duckdb_append_varchar(a, r->msgType);
-	appendStr(a, r->msgIndicator);
-	duckdb_append_uint32(a, r->transactionId);
-	duckdb_append_uint32(a, r->participantRefNo);
+	parquetAppendStr(pq, r->participantId);
+	parquetAppendStr(pq, r->msgCategory);
+	parquetAppendStr(pq, r->msgType);
+	parquetAppendStr(pq, r->msgIndicator);
+	parquetAppendU32(pq, r->transactionId);
+	parquetAppendU32(pq, r->participantRefNo);
 
 	// option series identity
-	appendStr(a, r->symbol);
-	appendStr(a, r->expirationMonthCode);
-	appendStr(a, r->putCall);
-	appendU8Opt(a, r, ROW_EXPIRATIONMONTH, r->expirationMonth);
-	appendU8Opt(a, r, ROW_EXPIRATIONDAY, r->expirationDay);
-	appendU16Opt(a, r, ROW_EXPIRATIONYEAR, r->expirationYear);
-	appendDblOpt(a, r, ROW_STRIKEPRICE, r->strikePrice);
+	parquetAppendStr(pq, r->symbol);
+	parquetAppendStr(pq, r->expirationMonthCode);
+	parquetAppendStr(pq, r->putCall);
+	appendU8Opt(pq, r, ROW_EXPIRATIONMONTH, r->expirationMonth);
+	appendU8Opt(pq, r, ROW_EXPIRATIONDAY, r->expirationDay);
+	appendU16Opt(pq, r, ROW_EXPIRATIONYEAR, r->expirationYear);
+	appendDblOpt(pq, r, ROW_STRIKEPRICE, r->strikePrice);
 
 	// a: Equity and Index Last Sale
-	appendU32Opt(a, r, ROW_VOLUME, r->volume);
-	appendDblOpt(a, r, ROW_PREMIUMPRICE, r->premiumPrice);
-	appendU32Opt(a, r, ROW_TRADEIDENTIFIER, r->tradeIdentifier);
-	appendU8Opt(a, r, ROW_TRADINGSESSIONID, r->tradingSessionId);
+	appendU32Opt(pq, r, ROW_VOLUME, r->volume);
+	appendDblOpt(pq, r, ROW_PREMIUMPRICE, r->premiumPrice);
+	appendU32Opt(pq, r, ROW_TRADEIDENTIFIER, r->tradeIdentifier);
+	appendU8Opt(pq, r, ROW_TRADINGSESSIONID, r->tradingSessionId);
 
 	// d: Open Interest
-	appendU32Opt(a, r, ROW_OPENINTERESTVOLUME, r->openInterestVolume);
+	appendU32Opt(pq, r, ROW_OPENINTERESTVOLUME, r->openInterestVolume);
 
 	// f: Equity and Index End of Day Summary
-	appendDblOpt(a, r, ROW_OPENPRICE, r->openPrice);
-	appendDblOpt(a, r, ROW_HIGHPRICE, r->highPrice);
-	appendDblOpt(a, r, ROW_LOWPRICE, r->lowPrice);
-	appendDblOpt(a, r, ROW_LASTPRICE, r->lastPrice);
-	appendDblOpt(a, r, ROW_NETCHANGE, r->netChange);
-	appendDblOpt(a, r, ROW_UNDERLYINGPRICE, r->underlyingPrice);
+	appendDblOpt(pq, r, ROW_OPENPRICE, r->openPrice);
+	appendDblOpt(pq, r, ROW_HIGHPRICE, r->highPrice);
+	appendDblOpt(pq, r, ROW_LOWPRICE, r->lowPrice);
+	appendDblOpt(pq, r, ROW_LASTPRICE, r->lastPrice);
+	appendDblOpt(pq, r, ROW_NETCHANGE, r->netChange);
+	appendDblOpt(pq, r, ROW_UNDERLYINGPRICE, r->underlyingPrice);
 
 	// k/q: Equity and Index Quote
-	appendDblOpt(a, r, ROW_BIDPRICE, r->bidPrice);
-	appendU32Opt(a, r, ROW_BIDSIZE, r->bidSize);
-	appendDblOpt(a, r, ROW_OFFERPRICE, r->offerPrice);
-	appendU32Opt(a, r, ROW_OFFERSIZE, r->offerSize);
+	appendDblOpt(pq, r, ROW_BIDPRICE, r->bidPrice);
+	appendU32Opt(pq, r, ROW_BIDSIZE, r->bidSize);
+	appendDblOpt(pq, r, ROW_OFFERPRICE, r->offerPrice);
+	appendU32Opt(pq, r, ROW_OFFERSIZE, r->offerSize);
 
 	// k/q BBO appendages
-	appendStr(a, r->bestBidParticipantId);
-	appendDblOpt(a, r, ROW_BESTBIDPRICE, r->bestBidPrice);
-	appendU32Opt(a, r, ROW_BESTBIDSIZE, r->bestBidSize);
-	appendStr(a, r->bestOfferParticipantId);
-	appendDblOpt(a, r, ROW_BESTOFFERPRICE, r->bestOfferPrice);
-	appendU32Opt(a, r, ROW_BESTOFFERSIZE, r->bestOfferSize);
+	parquetAppendStr(pq, r->bestBidParticipantId);
+	appendDblOpt(pq, r, ROW_BESTBIDPRICE, r->bestBidPrice);
+	appendU32Opt(pq, r, ROW_BESTBIDSIZE, r->bestBidSize);
+	parquetAppendStr(pq, r->bestOfferParticipantId);
+	appendDblOpt(pq, r, ROW_BESTOFFERPRICE, r->bestOfferPrice);
+	appendU32Opt(pq, r, ROW_BESTOFFERSIZE, r->bestOfferSize);
 
 	// C: Administrative
-	appendStr(a, r->adminText);
+	parquetAppendStr(pq, r->adminText);
 
 	// R: Series Mapping
-	appendU16Opt(a, r, ROW_MULTICASTLINENUMBER, r->multicastLineNumber);
+	appendU16Opt(pq, r, ROW_MULTICASTLINENUMBER, r->multicastLineNumber);
 
 	// Y: Underlying Value
-	appendDblOpt(a, r, ROW_INDEXVALUE, r->indexValue);
-	appendDblOpt(a, r, ROW_BIDINDEXVALUE, r->bidIndexValue);
-	appendDblOpt(a, r, ROW_OFFERINDEXVALUE, r->offerIndexValue);
+	appendDblOpt(pq, r, ROW_INDEXVALUE, r->indexValue);
+	appendDblOpt(pq, r, ROW_BIDINDEXVALUE, r->bidIndexValue);
+	appendDblOpt(pq, r, ROW_OFFERINDEXVALUE, r->offerIndexValue);
 
-	if (duckdb_appender_end_row(a) == DuckDBError)
-	{
-		fprintf(stderr, "opra6: append failed: %s\n", duckdb_appender_error(a));
-		return false;
-	}
-	return true;
+	return parquetRowEnd(pq);
 }
 
 //------------------------------------------------------------------------------
@@ -625,7 +614,7 @@ static void bboAppendageDecode(OPRA6Row_t* r, const u8* p, bool isBid)
 // is unknown / truncated (the caller must abandon the block: without a per
 // message length field the remaining messages cannot be located)
 //------------------------------------------------------------------------------
-static u32 opra6MsgDecode(Parquet_t* pq, OPRA6Row_t* rowTemplate, const u8* msg, u32 avail)
+static u32 opra6MsgDecode(Parquet_t* pq, const PacketInfo_t* pkt, OPRA6Row_t* rowTemplate, const u8* msg, u32 avail)
 {
 	if (avail < 12)
 	{
@@ -840,7 +829,7 @@ static u32 opra6MsgDecode(Parquet_t* pq, OPRA6Row_t* rowTemplate, const u8* msg,
 		return 0;
 	}
 
-	if (!opra6RowAppend(pq, &row))
+	if (!opra6RowAppend(pq, pkt, &row))
 	{
 		return 0;
 	}
@@ -852,8 +841,10 @@ static u32 opra6MsgDecode(Parquet_t* pq, OPRA6Row_t* rowTemplate, const u8* msg,
 // append every contained message to the parquet table. returns the number of
 // messages decoded
 //------------------------------------------------------------------------------
-u32 Protocol_OPRA6Decode(Parquet_t* pq, u64 pcapTS, const OPRA6Endpoint_t* endpoint, const u8* payload, u32 payloadLen)
+u32 Protocol_OPRA6Decode(Parquet_t* pq, const PacketInfo_t* pkt, void* endpointArg, const u8* payload, u32 payloadLen)
 {
+	const OPRA6Endpoint_t* endpoint = (const OPRA6Endpoint_t*)endpointArg;
+
 	// block header: version(1) size(2) feed(1) retrans(1) session(1) seq(4)
 	//               count(1) timestamp(8) checksum(2)
 	if (payloadLen < 21)
@@ -875,7 +866,6 @@ u32 Protocol_OPRA6Decode(Parquet_t* pq, u64 pcapTS, const OPRA6Endpoint_t* endpo
 	OPRA6Row_t rowTemplate;
 	memset(&rowTemplate, 0, sizeof(rowTemplate));
 
-	rowTemplate.pcapTS = pcapTS;
 	rowTemplate.lineNumber = endpoint->lineNumber;
 	rowTemplate.feedStream[0] = endpoint->feedStream;
 	rowTemplate.feedStream[1] = 0;
@@ -899,7 +889,7 @@ u32 Protocol_OPRA6Decode(Parquet_t* pq, u64 pcapTS, const OPRA6Endpoint_t* endpo
 		// messages after the first are implicitly numbered sequentially
 		rowTemplate.msgSeqNo = rowTemplate.blockSeqNo + i;
 
-		u32 msgLen = opra6MsgDecode(pq, &rowTemplate, ptr, (u32)(end - ptr));
+		u32 msgLen = opra6MsgDecode(pq, pkt, &rowTemplate, ptr, (u32)(end - ptr));
 		if (msgLen == 0)
 		{
 			// unknown category or truncation: the block cannot be walked further
@@ -917,22 +907,27 @@ u32 Protocol_OPRA6Decode(Parquet_t* pq, u64 pcapTS, const OPRA6Endpoint_t* endpo
 //------------------------------------------------------------------------------
 bool Protocol_OPRA6SchemaCreate(Parquet_t* pq)
 {
-	duckdb_result result;
-	if (duckdb_query(pq->con, s_schemaSQL, &result) == DuckDBError)
-	{
-		fprintf(stderr, "opra6: failed to create schema: %s\n", duckdb_result_error(&result));
-		duckdb_destroy_result(&result);
-		return false;
-	}
-	duckdb_destroy_result(&result);
+	return parquetSchemaCreate(pq, OPRA6_TABLE_NAME, s_schema, sizeof(s_schema) / sizeof(s_schema[0]));
+}
 
-	pq->tableName = OPRA6_TABLE_NAME;
+//------------------------------------------------------------------------------
+// protocol registration: self registers at program start (see fProtocol.h),
+// main.c and the Makefile carry no per protocol knowledge
+//------------------------------------------------------------------------------
+static Protocol_t s_protocolDesc =
+{
+	.name         = "opra_md_pillar6",
+	.shortName    = "opra",
+	.statsName    = "OPRA6",
+	.description  = "OPRA Pillar Binary v6",
+	.ipProto      = IPV4_PROTO_UDP,
+	.endpointSize = sizeof(OPRA6Endpoint_t),
+	.schemaCreate = Protocol_OPRA6SchemaCreate,
+	.classify     = Protocol_OPRA6PacketClassify,
+	.decode       = Protocol_OPRA6Decode,
+};
 
-	if (duckdb_appender_create(pq->con, NULL, OPRA6_TABLE_NAME, &pq->appender) == DuckDBError)
-	{
-		fprintf(stderr, "opra6: failed to create appender\n");
-		return false;
-	}
-
-	return true;
+static void __attribute__((constructor)) opra6Register(void)
+{
+	Protocol_Register(&s_protocolDesc);
 }

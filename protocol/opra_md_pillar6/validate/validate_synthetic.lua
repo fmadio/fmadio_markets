@@ -15,7 +15,10 @@ local DECODER = arg[1] or "../../../src/fmadio_markets"
 local PCAP    = arg[2] or "opra6_test.pcap"
 local PARQUET = arg[3] or "opra6_test.parq"
 
-local TBL = "read_parquet('" .. PARQUET .. "')"
+-- the parquet columns are grouped (frame_* / hdr_* / msg_*); alias them
+-- back to bare names once here so the check SQL below stays readable
+local COLS = '"frame_ts" AS pcapTS, "frame_ipSrc" AS ipSrc, "frame_ipDst" AS ipDst, "frame_portSrc" AS portSrc, "frame_portDst" AS portDst, "frame_ipProto" AS ipProto, "frame_vlanOuter" AS vlanOuter, "frame_vlanInner" AS vlanInner, "frame_pbTS" AS pbTS, "frame_pbFlags" AS pbFlags, "frame_pbDeviceID" AS pbDeviceID, "frame_pbPortID" AS pbPortID, "frame_hostname" AS hostname, "frame_pkt_block" AS pkt_block, "frame_pkt_offset" AS pkt_offset, "hdr_lineNumber" AS lineNumber, "hdr_feedStream" AS feedStream, "hdr_retransmission" AS retransmission, "hdr_sessionIndicator" AS sessionIndicator, "hdr_blockTimestampNS" AS blockTimestampNS, "hdr_blockSeqNo" AS blockSeqNo, "hdr_msgSeqNo" AS msgSeqNo, "msg_participantId" AS participantId, "msg_category" AS msgCategory, "msg_type" AS msgType, "msg_indicator" AS msgIndicator, "msg_transactionId" AS transactionId, "msg_participantRefNo" AS participantRefNo, "msg_symbol" AS symbol, "msg_expirationMonthCode" AS expirationMonthCode, "msg_putCall" AS putCall, "msg_expirationMonth" AS expirationMonth, "msg_expirationDay" AS expirationDay, "msg_expirationYear" AS expirationYear, "msg_strikePrice"::DECIMAL(20,8) AS strikePrice, "msg_volume" AS volume, "msg_premiumPrice"::DECIMAL(20,8) AS premiumPrice, "msg_tradeIdentifier" AS tradeIdentifier, "msg_tradingSessionId" AS tradingSessionId, "msg_openInterestVolume" AS openInterestVolume, "msg_openPrice"::DECIMAL(20,8) AS openPrice, "msg_highPrice"::DECIMAL(20,8) AS highPrice, "msg_lowPrice"::DECIMAL(20,8) AS lowPrice, "msg_lastPrice"::DECIMAL(20,8) AS lastPrice, "msg_netChange"::DECIMAL(20,8) AS netChange, "msg_underlyingPrice"::DECIMAL(20,8) AS underlyingPrice, "msg_bidPrice"::DECIMAL(20,8) AS bidPrice, "msg_bidSize" AS bidSize, "msg_offerPrice"::DECIMAL(20,8) AS offerPrice, "msg_offerSize" AS offerSize, "msg_bestBidParticipantId" AS bestBidParticipantId, "msg_bestBidPrice"::DECIMAL(20,8) AS bestBidPrice, "msg_bestBidSize" AS bestBidSize, "msg_bestOfferParticipantId" AS bestOfferParticipantId, "msg_bestOfferPrice"::DECIMAL(20,8) AS bestOfferPrice, "msg_bestOfferSize" AS bestOfferSize, "msg_adminText" AS adminText, "msg_multicastLineNumber" AS multicastLineNumber, "msg_indexValue"::DECIMAL(20,8) AS indexValue, "msg_bidIndexValue"::DECIMAL(20,8) AS bidIndexValue, "msg_offerIndexValue"::DECIMAL(20,8) AS offerIndexValue'
+local TBL = "(SELECT " .. COLS .. " FROM read_parquet('" .. PARQUET .. "'))"
 
 ------------------------------------------------------------------------------
 -- run the decoder
@@ -31,7 +34,7 @@ end
 -- duckdb query helper: returns first line of csv output, trimmed
 ------------------------------------------------------------------------------
 local function query(sql)
-	local p = assert(io.popen("duckdb -csv -noheader -c \"" .. sql .. "\" 2>&1"))
+	local p = assert(io.popen("duckdb -csv -noheader -c \"" .. sql:gsub('"', '\\"') .. "\" 2>&1"))
 	local out = p:read("*a")
 	p:close()
 	return (out:gsub("%s+$", ""))
